@@ -101,18 +101,33 @@ async def get_my_profile(current_user: UserProfile = Depends(get_current_user)):
 
 @router.post("/switch-role", response_model=SwitchRoleResponse)
 async def switch_demo_role(payload: SwitchRoleRequest, current_user: UserProfile = Depends(get_current_user)):
-    """Switch active demo role for demonstration of role-specific workflows during hackathon evaluation."""
+    """Switch active demo role for demonstration of role-specific workflows during hackathon evaluation.
+    Security Enforcement: Changing a role selector after login cannot elevate permissions to higher roles.
+    """
     if payload.role not in DEMO_PERSONAS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown role '{payload.role}'. Available roles: {list(DEMO_PERSONAS.keys())}",
         )
 
-    new_persona = DEMO_PERSONAS[payload.role]
-    new_token = create_access_token(new_persona["user_id"], new_persona["email"], new_persona["role"])
+    target_persona = DEMO_PERSONAS[payload.role]
+    # Check if target role requires permissions that current_user does not possess (Regulator has broad preview clearance)
+    if current_user.role != "REGULATOR_AICTE":
+        unauthorized_perms = [p for p in target_persona["permissions"] if p not in current_user.permissions]
+        if unauthorized_perms:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Permission elevation denied: Role '{current_user.role}' cannot elevate to "
+                    f"higher-privileged role '{payload.role}' without authenticating with designated credentials. "
+                    f"Missing required permission(s): {', '.join(unauthorized_perms)}."
+                ),
+            )
+
+    new_token = create_access_token(target_persona["user_id"], target_persona["email"], target_persona["role"])
     return SwitchRoleResponse(
         token=new_token,
-        user=get_user_profile(new_persona["role"]),
+        user=get_user_profile(target_persona["role"]),
     )
 
 

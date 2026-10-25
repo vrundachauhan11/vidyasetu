@@ -37,8 +37,18 @@ async def test_unauthenticated_review_decision_returns_401(unauthenticated_clien
 
 
 @pytest.mark.asyncio
+async def test_unauthenticated_rule_configuration_returns_401(unauthenticated_client):
+    """4. Configuring rules without authentication returns 401."""
+    resp = await unauthenticated_client.patch(
+        "/api/rules/R01_SANCTIONED_INTAKE_EXCEEDED/configuration",
+        json={"severity": "MEDIUM"},
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_tampered_or_malformed_token_returns_401(unauthenticated_client):
-    """4. Supplying a forged or modified token returns 401."""
+    """5. Supplying a forged or modified token returns 401."""
     valid_token = create_access_token("usr_01", "test@vidyasetu.local", "REGULATOR_AICTE")
     tampered_token = valid_token[:-4] + "ffff"
     headers = {"Authorization": f"Bearer {tampered_token}"}
@@ -49,7 +59,7 @@ async def test_tampered_or_malformed_token_returns_401(unauthenticated_client):
 
 @pytest.mark.asyncio
 async def test_login_success_for_all_demo_roles(unauthenticated_client):
-    """5. Every demo persona can log in with their documented demo credentials."""
+    """6. Every demo persona can log in with their documented demo credentials."""
     for role, persona in DEMO_PERSONAS.items():
         resp = await unauthenticated_client.post(
             "/api/auth/login",
@@ -72,7 +82,7 @@ async def test_login_success_for_all_demo_roles(unauthenticated_client):
 
 @pytest.mark.asyncio
 async def test_login_with_quick_role_selector(unauthenticated_client):
-    """6. 1-Click demo role selector returns valid token without typing password."""
+    """7. 1-Click demo role selector returns valid token without typing password."""
     resp = await unauthenticated_client.post(
         "/api/auth/login",
         json={"role": "INSTITUTION_ADMIN"},
@@ -85,7 +95,7 @@ async def test_login_with_quick_role_selector(unauthenticated_client):
 
 @pytest.mark.asyncio
 async def test_login_invalid_password_returns_401(unauthenticated_client):
-    """7. Submitting wrong demo password returns 401 with descriptive error."""
+    """8. Submitting wrong demo password returns 401 with descriptive error."""
     resp = await unauthenticated_client.post(
         "/api/auth/login",
         json={"email": "admin@apex-tech.edu", "password": "WrongPassword!2026"},
@@ -96,7 +106,7 @@ async def test_login_invalid_password_returns_401(unauthenticated_client):
 
 @pytest.mark.asyncio
 async def test_rbac_intake_upload_allowed_for_institution_admin():
-    """8. Institution Admin can upload CSV batches."""
+    """9. Institution Admin can upload CSV batches."""
     admin_token = create_access_token("usr_inst_01", "admin@apex-tech.edu", "INSTITUTION_ADMIN")
     transport = ASGITransport(app=app)
     async with AsyncClient(
@@ -112,7 +122,7 @@ async def test_rbac_intake_upload_allowed_for_institution_admin():
 
 @pytest.mark.asyncio
 async def test_rbac_intake_upload_forbidden_for_compliance_reviewer():
-    """9. Compliance Reviewer is forbidden from uploading intake batches (returns 403)."""
+    """10. Compliance Reviewer is forbidden from uploading intake batches (returns 403)."""
     reviewer_token = create_access_token("usr_rev_01", "reviewer.desk@vidyasetu.local", "COMPLIANCE_REVIEWER")
     transport = ASGITransport(app=app)
     async with AsyncClient(
@@ -128,8 +138,8 @@ async def test_rbac_intake_upload_forbidden_for_compliance_reviewer():
 
 
 @pytest.mark.asyncio
-async def test_rbac_review_decision_forbidden_for_institution_admin(client):
-    """10. Institution Admin is forbidden from adjudicating review decisions (returns 403)."""
+async def test_rbac_review_decision_forbidden_for_institution_admin():
+    """11. Institution Admin is forbidden from adjudicating review decisions (returns 403)."""
     admin_token = create_access_token("usr_inst_01", "admin@apex-tech.edu", "INSTITUTION_ADMIN")
     transport = ASGITransport(app=app)
     async with AsyncClient(
@@ -147,8 +157,95 @@ async def test_rbac_review_decision_forbidden_for_institution_admin(client):
 
 
 @pytest.mark.asyncio
+async def test_rbac_rule_configuration_allowed_for_regulator():
+    """12. AICTE Regulator can configure and update rules."""
+    regulator_token = create_access_token("usr_reg_01", "compliance.officer@aicte-gov.in", "REGULATOR_AICTE")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={"Authorization": f"Bearer {regulator_token}"},
+    ) as ac:
+        resp = await ac.patch(
+            "/api/rules/R01_SANCTIONED_INTAKE_EXCEEDED/configuration",
+            json={"severity": "HIGH", "status": "ACTIVE"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_rbac_rule_configuration_forbidden_for_compliance_reviewer():
+    """13. Compliance Reviewer is forbidden from modifying configured rules (returns 403)."""
+    reviewer_token = create_access_token("usr_rev_01", "reviewer.desk@vidyasetu.local", "COMPLIANCE_REVIEWER")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={"Authorization": f"Bearer {reviewer_token}"},
+    ) as ac:
+        resp = await ac.patch(
+            "/api/rules/R01_SANCTIONED_INTAKE_EXCEEDED/configuration",
+            json={"severity": "LOW"},
+        )
+        assert resp.status_code == 403
+        assert "not authorized" in resp.json().get("detail", "").lower()
+        assert "COMPLIANCE_REVIEWER" in resp.json().get("detail", "")
+
+
+@pytest.mark.asyncio
+async def test_rbac_rule_configuration_forbidden_for_institution_admin():
+    """14. Institution Admin is forbidden from modifying configured rules (returns 403)."""
+    admin_token = create_access_token("usr_inst_01", "admin@apex-tech.edu", "INSTITUTION_ADMIN")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    ) as ac:
+        resp = await ac.patch(
+            "/api/rules/R01_SANCTIONED_INTAKE_EXCEEDED/configuration",
+            json={"severity": "LOW"},
+        )
+        assert resp.status_code == 403
+        assert "not authorized" in resp.json().get("detail", "").lower()
+        assert "INSTITUTION_ADMIN" in resp.json().get("detail", "")
+
+
+@pytest.mark.asyncio
+async def test_permission_elevation_denied_when_switching_role():
+    """15. Changing role selector after login CANNOT elevate permissions to higher roles (returns 403)."""
+    admin_token = create_access_token("usr_inst_01", "admin@apex-tech.edu", "INSTITUTION_ADMIN")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    ) as ac:
+        # Admin attempting to switch to Regulator
+        resp = await ac.post("/api/auth/switch-role", json={"role": "REGULATOR_AICTE"})
+        assert resp.status_code == 403
+        assert "permission elevation denied" in resp.json().get("detail", "").lower()
+
+
+@pytest.mark.asyncio
+async def test_role_scoping_allowed_for_regulator():
+    """16. Higher-privileged regulator can scope view down to institutional preview."""
+    reg_token = create_access_token("usr_reg_01", "compliance.officer@aicte-gov.in", "REGULATOR_AICTE")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={"Authorization": f"Bearer {reg_token}"},
+    ) as ac:
+        resp = await ac.post("/api/auth/switch-role", json={"role": "INSTITUTION_ADMIN"})
+        assert resp.status_code == 200
+        assert resp.json()["user"]["role"] == "INSTITUTION_ADMIN"
+
+
+@pytest.mark.asyncio
 async def test_logout_terminates_session():
-    """11. Logout endpoint responds with session termination message."""
+    """17. Logout endpoint responds with session termination message."""
     token = create_access_token("usr_inst_01", "admin@apex-tech.edu", "INSTITUTION_ADMIN")
     transport = ASGITransport(app=app)
     async with AsyncClient(
@@ -160,24 +257,3 @@ async def test_logout_terminates_session():
         assert resp.status_code == 200
         assert resp.json()["success"] is True
         assert "logged out" in resp.json().get("message", "").lower()
-
-
-@pytest.mark.asyncio
-async def test_switch_role_issues_new_token():
-    """12. Switching role returns an updated user profile and a freshly signed token."""
-    token = create_access_token("usr_inst_01", "admin@apex-tech.edu", "INSTITUTION_ADMIN")
-    transport = ASGITransport(app=app)
-    async with AsyncClient(
-        transport=transport,
-        base_url="http://testserver",
-        headers={"Authorization": f"Bearer {token}"},
-    ) as ac:
-        resp = await ac.post("/api/auth/switch-role", json={"role": "COMPLIANCE_REVIEWER"})
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["user"]["role"] == "COMPLIANCE_REVIEWER"
-        assert data["token"] is not None
-
-        # Verify decoded payload has new role
-        decoded = decode_access_token(data["token"])
-        assert decoded["role"] == "COMPLIANCE_REVIEWER"

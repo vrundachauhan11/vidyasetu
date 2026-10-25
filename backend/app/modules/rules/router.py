@@ -1,9 +1,12 @@
 """Rule Registry & Intake Integrity Monitoring Module."""
-from fastapi import APIRouter, Depends
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
 from app.models import IntegritySignal, StudentEnrolment
+from app.modules.auth.security import UserProfile, require_roles
 
 router = APIRouter(prefix="/rules", tags=["Rule Registry & Integrity Monitoring"])
 
@@ -155,4 +158,50 @@ async def list_active_signals(db: AsyncSession = Depends(get_db)):
             }
             for sig, s_name, s_enr, s_apaar in rows
         ],
+    }
+
+
+class RuleConfigurationUpdate(BaseModel):
+    severity: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@router.patch("/{rule_code}/configuration")
+async def update_rule_configuration(
+    rule_code: str,
+    payload: RuleConfigurationUpdate,
+    current_user: UserProfile = Depends(require_roles("REGULATOR_AICTE")),
+):
+    """Regulator-only endpoint to configure or toggle rule parameters in the regulatory engine."""
+    rule = next((r for r in RULE_REGISTRY if r["code"] == rule_code), None)
+    if not rule:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Rule '{rule_code}' not found in registry.",
+        )
+
+    if payload.severity:
+        if payload.severity not in ["HIGH", "MEDIUM", "LOW"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Severity must be one of: HIGH, MEDIUM, LOW",
+            )
+        rule["severity"] = payload.severity
+
+    if payload.status:
+        if payload.status not in ["ACTIVE", "INACTIVE", "DISABLED"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Status must be one of: ACTIVE, INACTIVE, DISABLED",
+            )
+        rule["status"] = payload.status
+
+    return {
+        "success": True,
+        "demo_mode": True,
+        "rule_code": rule_code,
+        "updated_by": current_user.email,
+        "rule": rule,
+        "message": f"Rule '{rule_code}' updated successfully by AICTE Regulator ({current_user.name}).",
     }

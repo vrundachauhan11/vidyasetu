@@ -11,8 +11,9 @@ import {
   Building2,
   ClipboardCheck,
   Scale,
-  Sparkles,
+  Key,
   Info,
+  CheckCircle2,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { RoleType, UserProfile } from '../types';
@@ -22,43 +23,83 @@ interface LoginProps {
   targetNotice?: string;
 }
 
-const DEMO_PERSONAS = [
+interface DemoAccount {
+  role: RoleType;
+  title: string;
+  shortTitle: string;
+  personaName: string;
+  email: string;
+  demoPassword: string;
+  intendedScope: string;
+  icon: React.ComponentType<{ className?: string }>;
+}
+
+const DEMO_ACCOUNTS: DemoAccount[] = [
   {
-    role: 'INSTITUTION_ADMIN' as RoleType,
+    role: 'INSTITUTION_ADMIN',
     title: 'Institution Admin',
-    shortRole: 'Admin',
-    name: 'Prof. Sunita Rao (Apex Tech)',
+    shortTitle: 'Admin',
+    personaName: 'Prof. Sunita Rao (Registrar, Apex Tech)',
     email: 'admin@apex-tech.edu',
-    password: 'DemoAdmin@2026',
+    demoPassword: 'DemoAdmin@2026',
+    intendedScope: 'Manage institutional student data, validate schemas, and upload CSV admission rosters.',
     icon: Building2,
   },
   {
-    role: 'COMPLIANCE_REVIEWER' as RoleType,
+    role: 'COMPLIANCE_REVIEWER',
     title: 'Compliance Reviewer',
-    shortRole: 'Reviewer',
-    name: 'Er. Rajesh Pillai (Review Desk)',
+    shortTitle: 'Reviewer',
+    personaName: 'Er. Rajesh Pillai (Independent Compliance Evaluator)',
     email: 'reviewer.desk@vidyasetu.local',
-    password: 'DemoReviewer@2026',
+    demoPassword: 'DemoReviewer@2026',
+    intendedScope: 'Review evidence, investigate flagged records, and adjudicate integrity findings.',
     icon: ClipboardCheck,
   },
   {
-    role: 'REGULATOR_AICTE' as RoleType,
+    role: 'REGULATOR_AICTE',
     title: 'AICTE Regulator',
-    shortRole: 'Regulator',
-    name: 'Dr. V. K. Adhikari (Council Reviewer)',
+    shortTitle: 'Regulator',
+    personaName: 'Dr. V. K. Adhikari (AICTE Council Reviewer)',
     email: 'compliance.officer@aicte-gov.in',
-    password: 'DemoRegulator@2026',
+    demoPassword: 'DemoRegulator@2026',
+    intendedScope: 'Inspect configured rules, regulatory summaries, policy parameters, and audit trail.',
     icon: Scale,
   },
 ];
 
 export const Login: React.FC<LoginProps> = ({ onLoginSuccess, targetNotice }) => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [selectedRole, setSelectedRole] = useState<RoleType>('INSTITUTION_ADMIN');
+  const [email, setEmail] = useState('admin@apex-tech.edu');
+  const [password, setPassword] = useState('DemoAdmin@2026');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showDemoAccounts, setShowDemoAccounts] = useState(false);
+  const [prefillFeedback, setPrefillFeedback] = useState<string | null>(null);
+
+  const activeAccount = DEMO_ACCOUNTS.find((a) => a.role === selectedRole) || DEMO_ACCOUNTS[0];
+  const ActiveIcon = activeAccount.icon;
+
+  const handleSelectRole = (role: RoleType) => {
+    setSelectedRole(role);
+    const target = DEMO_ACCOUNTS.find((a) => a.role === role);
+    if (target) {
+      setEmail(target.email);
+      setPassword(target.demoPassword);
+      setPrefillFeedback(`Pre-filled demo credentials for ${target.title}`);
+      setErrorMsg(null);
+      setTimeout(() => setPrefillFeedback(null), 3000);
+    }
+  };
+
+  const handleUseAccount = (account: DemoAccount) => {
+    setSelectedRole(account.role);
+    setEmail(account.email);
+    setPassword(account.demoPassword);
+    setPrefillFeedback(`Pre-filled form with ${account.title} credentials (${account.email})`);
+    setErrorMsg(null);
+    setTimeout(() => setPrefillFeedback(null), 4000);
+  };
 
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,25 +118,6 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess, targetNotice }) =>
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleQuickLogin = async (role: RoleType) => {
-    setLoading(true);
-    setErrorMsg(null);
-    try {
-      const resp = await api.login({ role });
-      onLoginSuccess(resp.user);
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Sign-in failed. Please verify the backend service is running.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSelectDemoAccount = (demoEmail: string, demoPassword: string) => {
-    setEmail(demoEmail);
-    setPassword(demoPassword);
-    setErrorMsg(null);
   };
 
   return (
@@ -139,7 +161,52 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess, targetNotice }) =>
           </div>
         )}
 
-        {/* Standard Credentials Form */}
+        {/* 1. Visible Role Selector with Intended Access Explanation */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-semibold text-slate-700">Select Intended Access Role</label>
+            <span className="text-[10px] text-slate-400 font-mono">UI Preference</span>
+          </div>
+
+          <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200/80">
+            {DEMO_ACCOUNTS.map((acc) => (
+              <button
+                key={acc.role}
+                type="button"
+                onClick={() => handleSelectRole(acc.role)}
+                className={`py-1.5 px-2 rounded-lg text-xs font-medium transition-all text-center truncate ${
+                  selectedRole === acc.role
+                    ? 'bg-white text-slate-900 shadow-xs font-semibold border border-slate-200'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {acc.title}
+              </button>
+            ))}
+          </div>
+
+          {/* Intended Access Role Scope Card */}
+          <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs space-y-1">
+            <div className="flex items-center gap-2">
+              <ActiveIcon className="w-4 h-4 text-blue-600 shrink-0" />
+              <span className="font-semibold text-slate-900">{activeAccount.title}</span>
+              <span className="text-[10px] text-slate-400 truncate">({activeAccount.personaName.split('(')[0].trim()})</span>
+            </div>
+            <p className="text-[11px] text-slate-600 leading-snug pl-6">
+              {activeAccount.intendedScope}
+            </p>
+          </div>
+        </div>
+
+        {/* Pre-fill Feedback Toast */}
+        {prefillFeedback && (
+          <div className="p-2 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center gap-2 text-xs text-emerald-800 animate-fadeIn">
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <span className="text-[11px] font-medium">{prefillFeedback}</span>
+          </div>
+        )}
+
+        {/* 2. Login Form */}
         <form onSubmit={handleManualSubmit} className="space-y-4">
           <div>
             <label htmlFor="email" className="block text-xs font-medium text-slate-700 mb-1.5">
@@ -161,11 +228,9 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess, targetNotice }) =>
           </div>
 
           <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label htmlFor="password" className="block text-xs font-medium text-slate-700">
-                Password
-              </label>
-            </div>
+            <label htmlFor="password" className="block text-xs font-medium text-slate-700 mb-1.5">
+              Password
+            </label>
             <div className="relative">
               <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
@@ -199,7 +264,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess, targetNotice }) =>
               <span className="inline-block w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
             ) : (
               <>
-                <span>Sign in</span>
+                <span>Sign in as {activeAccount.title}</span>
                 <ArrowRight className="w-4 h-4" />
               </>
             )}
@@ -216,7 +281,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess, targetNotice }) =>
           </div>
         </div>
 
-        {/* Google OAuth (Unconfigured / Disabled Placeholder) */}
+        {/* 3. Google OAuth Button (Clearly Disabled & Documented as Unconfigured) */}
         <div>
           <button
             type="button"
@@ -224,7 +289,6 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess, targetNotice }) =>
             title="Google OAuth integration is not configured in this prototype environment"
             className="w-full py-2 px-4 rounded-xl text-xs font-medium bg-slate-50 text-slate-400 border border-slate-200 flex items-center justify-center gap-2.5 cursor-not-allowed transition-all"
           >
-            {/* Google Multicolor SVG */}
             <svg className="w-4 h-4 opacity-50" viewBox="0 0 24 24">
               <path
                 fill="#4285F4"
@@ -244,72 +308,108 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess, targetNotice }) =>
               />
             </svg>
             <span>Continue with Google</span>
-            <span className="text-[10px] text-slate-400 font-mono">(Pending Setup)</span>
+            <span className="text-[10px] text-slate-400 font-mono">(Not configured)</span>
           </button>
         </div>
 
-        {/* Compact, Unobtrusive Demo Account Accessor */}
-        <div className="pt-2">
+        {/* 4. Compact Expandable "Demo accounts & access roles" Section */}
+        <div className="pt-2 border-t border-slate-100">
           <button
             type="button"
             onClick={() => setShowDemoAccounts(!showDemoAccounts)}
-            className="w-full flex items-center justify-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium py-1.5 transition-colors"
+            className="w-full flex items-center justify-between text-xs text-slate-700 hover:text-blue-600 font-semibold py-2 px-3 bg-slate-50 hover:bg-slate-100/80 border border-slate-200/90 rounded-xl transition-all"
           >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Use a demo account</span>
-            <ChevronDown
-              className={`w-3.5 h-3.5 transition-transform duration-200 ${
-                showDemoAccounts ? 'rotate-180' : ''
-              }`}
-            />
+            <div className="flex items-center gap-1.5">
+              <Key className="w-3.5 h-3.5 text-blue-600" />
+              <span>Demo accounts & access roles</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] text-slate-500 font-normal">SIH Prototype</span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                  showDemoAccounts ? 'rotate-180' : ''
+                }`}
+              />
+            </div>
           </button>
 
-          {/* Collapsible Demo Personas Menu */}
+          {/* Detailed Demo Credentials Drawer */}
           {showDemoAccounts && (
-            <div className="mt-3 p-3 bg-slate-50 rounded-xl border border-slate-200/80 space-y-2 text-xs">
-              <div className="text-[11px] font-semibold text-slate-600 pb-1 border-b border-slate-200/60 flex items-center justify-between">
-                <span>Select a Demo Role:</span>
-                <span className="text-[10px] text-slate-400 font-normal">Click to fill or sign in</span>
+            <div className="mt-2.5 p-3.5 bg-slate-50 rounded-xl border border-slate-200/90 space-y-3 text-xs">
+              <div className="flex items-center justify-between text-[11px] pb-2 border-b border-slate-200/70">
+                <span className="font-bold text-slate-700 uppercase tracking-wider">
+                  Configured Demo Personas
+                </span>
+                <span className="text-[10px] font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                  Public Demo Passwords
+                </span>
               </div>
 
-              <div className="space-y-1.5">
-                {DEMO_PERSONAS.map((persona) => {
-                  const Icon = persona.icon;
+              <div className="space-y-2.5">
+                {DEMO_ACCOUNTS.map((acc) => {
+                  const AccIcon = acc.icon;
+                  const isCurrent = email === acc.email;
+
                   return (
                     <div
-                      key={persona.role}
-                      className="p-2 bg-white rounded-lg border border-slate-200/70 hover:border-blue-400 flex items-center justify-between gap-2 transition-all group"
+                      key={acc.role}
+                      className={`p-3 rounded-lg border transition-all ${
+                        isCurrent
+                          ? 'bg-blue-50/50 border-blue-300 ring-1 ring-blue-200'
+                          : 'bg-white border-slate-200 hover:border-slate-300'
+                      }`}
                     >
-                      <button
-                        type="button"
-                        onClick={() => handleSelectDemoAccount(persona.email, persona.password)}
-                        className="flex items-center gap-2 min-w-0 text-left flex-1"
-                        title="Click to fill email and password"
-                      >
-                        <div className="w-7 h-7 rounded-md bg-slate-100 group-hover:bg-blue-50 text-slate-600 group-hover:text-blue-600 flex items-center justify-center shrink-0 transition-colors">
-                          <Icon className="w-3.5 h-3.5" />
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-md bg-slate-100 text-slate-700 flex items-center justify-center shrink-0">
+                            <AccIcon className="w-3.5 h-3.5" />
+                          </div>
+                          <div>
+                            <span className="font-bold text-slate-900 text-xs">{acc.title}</span>
+                            <span className="text-[10px] text-slate-500 block">{acc.personaName}</span>
+                          </div>
                         </div>
-                        <div className="min-w-0">
-                          <span className="block font-semibold text-slate-800 text-[11px] truncate">
-                            {persona.title}
-                          </span>
-                          <span className="block text-[10px] text-slate-400 font-mono truncate">
-                            {persona.email}
-                          </span>
-                        </div>
-                      </button>
 
-                      <button
-                        type="button"
-                        disabled={loading}
-                        onClick={() => handleQuickLogin(persona.role)}
-                        className="px-2.5 py-1 text-[11px] font-semibold rounded-md bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-700 transition-colors shrink-0 disabled:opacity-50"
-                      >
-                        Sign in as {persona.shortRole}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => handleUseAccount(acc)}
+                          className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors shrink-0 ${
+                            isCurrent
+                              ? 'bg-blue-600 text-white shadow-2xs'
+                              : 'bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-700'
+                          }`}
+                        >
+                          {isCurrent ? 'Active Account' : 'Use this account'}
+                        </button>
+                      </div>
+
+                      <div className="mt-2 pt-2 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-1.5 font-mono text-[11px]">
+                        <div className="truncate">
+                          <span className="text-slate-400 not-mono text-[10px] block">Email:</span>
+                          <span className="text-slate-800 font-semibold select-all">{acc.email}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 not-mono text-[10px] block">Demo Password:</span>
+                          <span className="text-slate-800 font-semibold bg-slate-100 px-1.5 py-0.5 rounded select-all">
+                            {acc.demoPassword}
+                          </span>
+                        </div>
+                      </div>
+
+                      <p className="mt-1.5 text-[10px] text-slate-500 leading-tight">
+                        <strong>Role Scope:</strong> {acc.intendedScope}
+                      </p>
                     </div>
                   );
                 })}
+              </div>
+
+              {/* Security & Prototype Disclosure Note */}
+              <div className="pt-2 border-t border-slate-200/60 text-[10px] text-slate-500 flex items-start gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5 text-teal-600 shrink-0 mt-0.5" />
+                <p>
+                  <strong>Security Note:</strong> These demo credentials are non-production prototype accounts for SIH PS 26263 evaluation. The backend enforces cryptographic HMAC-SHA256 authorization; client role selections cannot elevate permissions.
+                </p>
               </div>
             </div>
           )}
@@ -317,8 +417,8 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess, targetNotice }) =>
       </div>
 
       {/* Subtle Footer Prototype Notice */}
-      <div className="mt-6 text-center text-xs text-slate-400 space-y-1">
-        <p>SIH 2026 Prototype · Demo accounts available</p>
+      <div className="mt-6 text-center text-xs text-slate-400 space-y-0.5">
+        <p>SIH 2026 Prototype · Synthetic Demo Data</p>
         <p className="text-[11px] text-slate-400/80">
           Deterministic simulation for Problem Statement 26263
         </p>
