@@ -68,17 +68,28 @@ export const IntakeIntegrity: React.FC<IntakeIntegrityProps> = ({ onNavigateToRe
                     <span className="font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200/60">
                       {rule.code}
                     </span>
-                    <span
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                        rule.severity === 'HIGH'
-                          ? 'bg-rose-100 text-rose-800'
-                          : rule.severity === 'MEDIUM'
-                          ? 'bg-amber-100 text-amber-800'
-                          : 'bg-blue-100 text-blue-800'
-                      }`}
-                    >
-                      {rule.severity} Severity
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${
+                          rule.implementation_status === 'OPERATIONAL'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : 'bg-slate-100 text-slate-600 border-slate-200'
+                        }`}
+                      >
+                        {rule.implementation_status === 'OPERATIONAL' ? 'Runtime Engine' : 'Demo Spec'}
+                      </span>
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                          rule.severity === 'HIGH'
+                            ? 'bg-rose-100 text-rose-800'
+                            : rule.severity === 'MEDIUM'
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-blue-100 text-blue-800'
+                        }`}
+                      >
+                        {rule.severity} Severity
+                      </span>
+                    </div>
                   </div>
 
                   <h3 className="text-xs font-bold text-slate-900 leading-snug">{rule.title}</h3>
@@ -88,13 +99,24 @@ export const IntakeIntegrity: React.FC<IntakeIntegrityProps> = ({ onNavigateToRe
                 </div>
 
                 <div className="pt-3 border-t border-slate-100 space-y-1.5 text-[11px]">
-                  <div className="flex items-center justify-between text-slate-500">
-                    <span className="flex items-center gap-1">
+                  <div className="flex items-center justify-between text-slate-500 gap-2">
+                    <span className="flex items-center gap-1 shrink-0">
                       <BookOpen className="w-3 h-3 text-slate-400" /> Statutory Clause
                     </span>
-                    <span className="font-mono text-slate-700 text-[10px] truncate max-w-xs" title={rule.regulatory_reference}>
-                      {rule.regulatory_reference}
-                    </span>
+                    <div className="flex items-center gap-1 max-w-[65%] justify-end">
+                      <span
+                        className={`text-[8px] font-bold px-1 py-0.2 rounded border shrink-0 ${
+                          rule.reference_status === 'VERIFIED_STATUTORY'
+                            ? 'bg-blue-50 text-blue-700 border-blue-200'
+                            : 'bg-amber-50 text-amber-700 border-amber-200'
+                        }`}
+                      >
+                        {rule.reference_status === 'VERIFIED_STATUTORY' ? 'Verified' : 'Demo Ref'}
+                      </span>
+                      <span className="font-mono text-slate-700 text-[10px] truncate" title={rule.regulatory_reference}>
+                        {rule.regulatory_reference}
+                      </span>
+                    </div>
                   </div>
                   <div className="flex items-center justify-between text-slate-500">
                     <span>Active Signals</span>
@@ -137,7 +159,9 @@ export const IntakeIntegrity: React.FC<IntakeIntegrityProps> = ({ onNavigateToRe
                       className={`font-mono text-[10px] font-bold px-2 py-0.5 rounded ${
                         sig.severity === 'HIGH'
                           ? 'bg-rose-100 text-rose-800'
-                          : 'bg-amber-100 text-amber-800'
+                          : sig.severity === 'MEDIUM'
+                          ? 'bg-amber-100 text-amber-800'
+                          : 'bg-blue-100 text-blue-800'
                       }`}
                     >
                       {sig.rule_code}

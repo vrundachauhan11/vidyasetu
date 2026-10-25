@@ -118,6 +118,8 @@ export interface RuleDefinition {
   regulatory_reference: string;
   description: string;
   status: string;
+  implementation_status?: 'OPERATIONAL' | 'DEMO_SPECIFICATION';
+  reference_status?: 'VERIFIED_STATUTORY' | 'DEMO_REFERENCE';
 }
 
 export interface AuditLogItem {

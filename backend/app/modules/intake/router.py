@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from app.database import get_db
 from app.models import IntakeBatch, Institution, ProgrammeApproval, StudentEnrolment, IntegritySignal, AuditLog
 from app.seed.demo_data import generate_tamper_hash
@@ -129,6 +129,15 @@ async def upload_intake_csv(
     flagged_count = 0
     records_processed = 0
     seen_enrolments_in_batch = set()
+    seen_apaars_in_batch = set()
+
+    # Pre-fetch existing active enrolment counts per programme to evaluate intake capacity limits
+    prog_counts_res = await db.execute(
+        select(StudentEnrolment.programme_id, func.count(StudentEnrolment.id))
+        .where(StudentEnrolment.institution_id == inst.id)
+        .group_by(StudentEnrolment.programme_id)
+    )
+    prog_enrolment_counts = {p_id: cnt for p_id, cnt in prog_counts_res.all() if p_id}
 
     try:
         batch = IntakeBatch(
@@ -165,46 +174,41 @@ async def upload_intake_csv(
             if not name:
                 name = f"Unnamed Candidate #{records_processed}"
 
-            # Simulated APAAR verification outcome:
+            findings: list[tuple[str, str, str, str]] = []
+
+            # 1. Simulated APAAR verification outcome:
             # - If apaar empty: UNAVAILABLE (operational data gap, NOT fraud) -> R02_APAAR_UNAVAILABLE_IN_ROSTER (LOW)
             # - If apaar ends with 3: PENDING_VERIFICATION (operational sync delay, NOT fraud) -> R02_APAAR_PENDING_ACKNOWLEDGEMENT (LOW)
             # - If apaar ends with 9: MISMATCH (spelling anomaly review flag) -> R02_APAAR_NAME_DISCREPANCY (MEDIUM)
             # - Otherwise: VERIFIED
-            is_flagged = False
-            flag_severity = "LOW"
             if not apaar:
                 apaar_status = "UNAVAILABLE"
-                integrity_status = "FLAGGED_FOR_REVIEW"
-                flag_rule = "R02_APAAR_UNAVAILABLE_IN_ROSTER"
-                flag_severity = "LOW"
-                flag_summary = "APAAR identifier not provided in admission roster"
-                flag_explanation = "Student record was submitted without a synthetic APAAR ID. Requires administrative follow-up to obtain synthetic identity identifier. Note: Missing APAAR status alone is an operational data gap, not proof of fraud."
-                is_flagged = True
+                findings.append((
+                    "R02_APAAR_UNAVAILABLE_IN_ROSTER",
+                    "LOW",
+                    "APAAR identifier not provided in admission roster",
+                    "Student record was submitted without a synthetic APAAR ID. Requires administrative follow-up to obtain synthetic identity identifier. Note: Missing APAAR status alone is an operational data gap, not proof of fraud."
+                ))
             elif apaar.endswith("3"):
                 apaar_status = "PENDING_VERIFICATION"
-                integrity_status = "FLAGGED_FOR_REVIEW"
-                flag_rule = "R02_APAAR_PENDING_ACKNOWLEDGEMENT"
-                flag_severity = "LOW"
-                flag_summary = "APAAR ID verification handshake pending acknowledgment"
-                flag_explanation = f"Simulated verification adapter returned PENDING status for '{apaar}'. Note: Pending sync is an operational transition state, not proof of fraud or discrepancy."
-                is_flagged = True
+                findings.append((
+                    "R02_APAAR_PENDING_ACKNOWLEDGEMENT",
+                    "LOW",
+                    "APAAR ID verification handshake pending acknowledgment",
+                    f"Simulated verification adapter returned PENDING status for '{apaar}'. Note: Pending sync is an operational transition state, not proof of fraud or discrepancy."
+                ))
             elif apaar.endswith("9"):
                 apaar_status = "MISMATCH"
-                integrity_status = "FLAGGED_FOR_REVIEW"
-                flag_rule = "R02_APAAR_NAME_DISCREPANCY"
-                flag_severity = "MEDIUM"
-                flag_summary = "Identity name variation flagged between roster and simulated registry"
-                flag_explanation = f"Simulated registry returns phonetic spelling variation for '{name}' with APAAR '{apaar}'. Reviewer triage required."
-                is_flagged = True
+                findings.append((
+                    "R02_APAAR_NAME_DISCREPANCY",
+                    "MEDIUM",
+                    "Identity name variation flagged between roster and simulated registry",
+                    f"Simulated registry returns phonetic spelling variation for '{name}' with APAAR '{apaar}'. Reviewer triage required."
+                ))
             else:
                 apaar_status = "VERIFIED"
-                integrity_status = "CLEARED"
-                flag_rule = None
-                flag_severity = "LOW"
-                flag_summary = ""
-                flag_explanation = ""
 
-            # Check for intra-batch duplicate enrolment
+            # 2. Check for intra-batch duplicate enrolment number
             is_intra_batch_dup = False
             effective_enr = enr
             if not effective_enr:
@@ -213,22 +217,63 @@ async def upload_intake_csv(
                 # Intra-batch duplicate: differentiate enrolment key and flag as duplicate
                 is_intra_batch_dup = True
                 effective_enr = f"{effective_enr}-DUP{records_processed}"
-                integrity_status = "FLAGGED_FOR_REVIEW"
-                flag_rule = "R03_DUPLICATE_CONCURRENT_ENROLMENT"
-                flag_severity = "HIGH"
-                flag_summary = f"Duplicate enrolment identifier '{enr}' detected in batch"
-                flag_explanation = f"Enrolment number '{enr}' appeared multiple times within the same CSV intake batch '{batch_ref}'. Flagged for deduplication review."
-                is_flagged = True
+                findings.append((
+                    "R03_DUPLICATE_CONCURRENT_ENROLMENT",
+                    "HIGH",
+                    f"Duplicate enrolment identifier '{enr}' detected in batch",
+                    f"Enrolment number '{enr}' appeared multiple times within the same CSV intake batch '{batch_ref}'. Flagged for deduplication review."
+                ))
             else:
                 seen_enrolments_in_batch.add(effective_enr)
 
-            # Check if student with this enrolment_number already exists in database
+            # 3. Check for duplicate or concurrent APAAR identifier
+            if apaar:
+                if apaar in seen_apaars_in_batch:
+                    findings.append((
+                        "R03_DUPLICATE_CONCURRENT_ENROLMENT",
+                        "HIGH",
+                        f"Duplicate synthetic APAAR identifier '{apaar}' detected in batch",
+                        f"Synthetic APAAR ID '{apaar}' was submitted multiple times within intake batch '{batch_ref}' under different enrolment records. Dual full-time technical enrolment is restricted under UGC Guidelines (April 2022)."
+                    ))
+                else:
+                    # Check database for concurrent enrolment under a different enrolment number
+                    concurrent_res = await db.execute(
+                        select(StudentEnrolment).where(
+                            StudentEnrolment.apaar_id == apaar,
+                            StudentEnrolment.enrolment_number != effective_enr
+                        )
+                    )
+                    concurrent_st = concurrent_res.scalars().first()
+                    if concurrent_st:
+                        findings.append((
+                            "R03_DUPLICATE_CONCURRENT_ENROLMENT",
+                            "HIGH",
+                            f"Concurrent enrolment detected for APAAR identifier '{apaar}'",
+                            f"Synthetic APAAR ID '{apaar}' is already enrolled in another student record ('{concurrent_st.student_name}', {concurrent_st.enrolment_number}) in the database. Dual full-time technical enrolment requires verification under UGC Guidelines (April 2022)."
+                        ))
+                    else:
+                        seen_apaars_in_batch.add(apaar)
+
+            # 4. Check if student with this enrolment_number already exists in database
             existing_student = None
             if not is_intra_batch_dup and effective_enr:
                 existing_res = await db.execute(
                     select(StudentEnrolment).where(StudentEnrolment.enrolment_number == effective_enr)
                 )
                 existing_student = existing_res.scalar_one_or_none()
+
+            # 5. Check approved intake capacity limit (R01_SANCTIONED_INTAKE_EXCEEDED)
+            if not existing_student and matched_prog:
+                curr_prog_id = matched_prog.id
+                prog_enrolment_counts[curr_prog_id] = prog_enrolment_counts.get(curr_prog_id, 0) + 1
+                curr_prog_count = prog_enrolment_counts[curr_prog_id]
+                if matched_prog.sanctioned_intake and curr_prog_count > matched_prog.sanctioned_intake:
+                    findings.append((
+                        "R01_SANCTIONED_INTAKE_EXCEEDED",
+                        "HIGH",
+                        f"Enrolment exceeds sanctioned intake limit of {matched_prog.sanctioned_intake} seats [DEMO CONFIGURATION]",
+                        f"Enrolment sequence #{curr_prog_count} exceeds approved capacity of {matched_prog.sanctioned_intake} seats for '{matched_prog.programme_name}'. Sourced from institutional programme approval [DEMO CONFIGURATION]. Triage required to verify supernumerary or quota allocation."
+                    ))
 
             if existing_student:
                 # Version existing student record instead of crashing with Unique Constraint
@@ -251,59 +296,44 @@ async def upload_intake_csv(
                 active_signals = [s for s in existing_signals if s.review_status == "PENDING"]
                 resolved_signals = [s for s in existing_signals if s.review_status != "PENDING"]
 
-                if is_flagged and flag_rule:
-                    has_active = any(s.rule_code == flag_rule for s in active_signals)
-                    has_resolved = any(s.rule_code == flag_rule for s in resolved_signals)
+                # Process all findings with deduplication
+                for f_rule, f_sev, f_sum, f_exp in findings:
+                    has_active = any(s.rule_code == f_rule for s in active_signals)
+                    has_resolved = any(s.rule_code == f_rule for s in resolved_signals)
 
-                    if has_active:
-                        # Signal already in pending queue; do not insert duplicate
-                        flagged_count += 1
-                        existing_student.integrity_status = "FLAGGED_FOR_REVIEW"
-                    elif has_resolved:
-                        # Prior review resolution exists for this finding condition.
-                        # Preserve reviewer decision and notes without resurrecting duplicate signal.
-                        if len(active_signals) > 0:
-                            existing_student.integrity_status = "FLAGGED_FOR_REVIEW"
-                            flagged_count += 1
-                        else:
-                            existing_student.integrity_status = "RESOLVED"
-                            valid_count += 1
-                    else:
-                        # Genuinely new finding on re-upload
+                    if not has_active and not has_resolved:
                         sig = IntegritySignal(
                             id=str(uuid.uuid4()),
                             student_id=existing_student.id,
-                            rule_code=flag_rule,
-                            severity=flag_severity,
-                            finding_summary=flag_summary,
-                            explanation=flag_explanation,
+                            rule_code=f_rule,
+                            severity=f_sev,
+                            finding_summary=f_sum,
+                            explanation=f_exp,
                             review_status="PENDING",
                             created_at=now,
                         )
                         db.add(sig)
-                        flagged_count += 1
-                        existing_student.integrity_status = "FLAGGED_FOR_REVIEW"
-                else:
-                    # Clean/verified in current upload. Auto-resolve any pending APAAR flags if now verified.
-                    auto_resolved_any = False
+                        active_signals.append(sig)
+
+                # Clean/verified in current upload. Auto-resolve any pending APAAR flags if now verified.
+                if apaar_status == "VERIFIED":
                     for s in active_signals:
                         if s.rule_code in ("R02_APAAR_PENDING_ACKNOWLEDGEMENT", "R02_APAAR_UNAVAILABLE_IN_ROSTER", "R02_APAAR_NAME_DISCREPANCY"):
                             s.review_status = "RESOLVED_VERIFIED"
                             s.reviewer_decision = "AUTO_RESOLVED_BY_INSPECTION"
                             s.reviewer_notes = "Automatically resolved: Student APAAR verification handshake completed successfully in subsequent intake roster."
                             s.reviewed_at = now
-                            auto_resolved_any = True
 
-                    remaining_active = [s for s in active_signals if s.review_status == "PENDING"]
-                    if remaining_active:
-                        existing_student.integrity_status = "FLAGGED_FOR_REVIEW"
-                        flagged_count += 1
-                    elif resolved_signals or auto_resolved_any:
-                        existing_student.integrity_status = "RESOLVED"
-                        valid_count += 1
-                    else:
-                        existing_student.integrity_status = "CLEARED"
-                        valid_count += 1
+                remaining_active = [s for s in active_signals if s.review_status == "PENDING"]
+                if remaining_active:
+                    existing_student.integrity_status = "FLAGGED_FOR_REVIEW"
+                    flagged_count += 1
+                elif resolved_signals:
+                    existing_student.integrity_status = "RESOLVED"
+                    valid_count += 1
+                else:
+                    existing_student.integrity_status = "CLEARED"
+                    valid_count += 1
             else:
                 # Create new student enrolment
                 student = StudentEnrolment(
@@ -319,7 +349,7 @@ async def upload_intake_csv(
                     quota=row.get("quota") or "State Merit Quota",
                     enrolment_number=effective_enr,
                     admission_date=row.get("admission_date") or now.strftime("%Y-%m-%d"),
-                    integrity_status=integrity_status,
+                    integrity_status="FLAGGED_FOR_REVIEW" if findings else "CLEARED",
                     version=1,
                     is_latest=True,
                     created_at=now,
@@ -328,18 +358,19 @@ async def upload_intake_csv(
                 db.add(student)
                 await db.flush()
 
-                if is_flagged and flag_rule:
-                    sig = IntegritySignal(
-                        id=str(uuid.uuid4()),
-                        student_id=student.id,
-                        rule_code=flag_rule,
-                        severity=flag_severity,
-                        finding_summary=flag_summary,
-                        explanation=flag_explanation,
-                        review_status="PENDING",
-                        created_at=now,
-                    )
-                    db.add(sig)
+                if findings:
+                    for f_rule, f_sev, f_sum, f_exp in findings:
+                        sig = IntegritySignal(
+                            id=str(uuid.uuid4()),
+                            student_id=student.id,
+                            rule_code=f_rule,
+                            severity=f_sev,
+                            finding_summary=f_sum,
+                            explanation=f_exp,
+                            review_status="PENDING",
+                            created_at=now,
+                        )
+                        db.add(sig)
                     flagged_count += 1
                 else:
                     valid_count += 1
