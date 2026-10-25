@@ -95,8 +95,22 @@ export const api = {
       body: formData,
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || 'Upload failed');
+      let errorMsg = `Upload failed (HTTP ${res.status})`;
+      try {
+        const err = await res.json();
+        if (typeof err.detail === 'string') {
+          errorMsg = err.detail;
+        } else if (Array.isArray(err.detail)) {
+          errorMsg = err.detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ');
+        } else if (err.error?.message) {
+          errorMsg = err.error.message;
+        } else if (err.message) {
+          errorMsg = err.message;
+        }
+      } catch {
+        // use fallback errorMsg
+      }
+      throw new Error(errorMsg);
     }
     return res.json();
   },

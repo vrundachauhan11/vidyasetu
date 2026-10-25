@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.database import get_db
 from app.models import IntakeBatch, Institution, ProgrammeApproval, StudentEnrolment, IntegritySignal, AuditLog
 from app.seed.demo_data import generate_tamper_hash
+from app.logging_config import logger
 
 router = APIRouter(prefix="/intake", tags=["Data Intake & Validation"])
 
@@ -61,142 +62,271 @@ async def upload_intake_csv(
     db: AsyncSession = Depends(get_db),
 ):
     """Upload and validate synthetic student roster CSV.
-    Executes schema checks, deterministic rules, and creates intake batch.
+    Executes schema checks, deterministic rules, duplicate handling with record versioning, and creates intake batch.
     """
-    if not file.filename.endswith(".csv"):
+    if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV format is accepted for data intake.")
 
-    contents = await file.read()
-    text = contents.decode("utf-8-sig", errors="replace")
-    reader = csv.DictReader(io.StringIO(text))
+    try:
+        contents = await file.read()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to read uploaded file: {str(exc)}")
+
+    if not contents or len(contents.strip()) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded CSV file is empty.")
+
+    try:
+        text = contents.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            text = contents.decode("latin-1")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Malformed CSV input: unable to decode text.")
+
+    # Check for empty lines or malformed content
+    string_io = io.StringIO(text)
+    try:
+        reader = csv.DictReader(string_io)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Malformed CSV input: {str(exc)}")
 
     required_fields = ["student_name", "apaar_id", "dob", "gender", "category", "quota", "enrolment_number"]
-    if not reader.fieldnames or not all(f in reader.fieldnames for f in required_fields):
+    if not reader.fieldnames:
+        raise HTTPException(status_code=422, detail="CSV file has no header row.")
+
+    missing_fields = [f for f in required_fields if f not in reader.fieldnames]
+    if missing_fields:
         raise HTTPException(
             status_code=422,
-            detail=f"CSV schema mismatch. Missing one or more required columns: {required_fields}",
+            detail=f"CSV schema mismatch. Missing required column(s): {', '.join(missing_fields)}",
         )
+
+    rows = list(reader)
+    if len(rows) == 0:
+        raise HTTPException(status_code=422, detail="CSV contains headers but no data rows.")
 
     # Find institution
     inst_res = await db.execute(select(Institution).where(Institution.aicte_id == institution_id))
     inst = inst_res.scalar_one_or_none()
     if not inst:
-        # Fallback to first institution
         fallback_res = await db.execute(select(Institution).limit(1))
         inst = fallback_res.scalar_one_or_none()
 
     if not inst:
         raise HTTPException(status_code=400, detail="No institution found to associate intake batch with.")
 
-    # Find default programme
+    # Find all programmes for this institution for accurate matching
     prog_res = await db.execute(
-        select(ProgrammeApproval).where(ProgrammeApproval.institution_id == inst.id).limit(1)
+        select(ProgrammeApproval).where(ProgrammeApproval.institution_id == inst.id)
     )
-    prog = prog_res.scalar_one_or_none()
+    all_progs = prog_res.scalars().all()
+    default_prog = all_progs[0] if all_progs else None
 
     now = datetime.now(timezone.utc)
-    batch_ref = f"BATCH-{now.strftime('%Y%m%d-%H%M%S')}"
+    batch_ref = f"BATCH-{now.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
 
     valid_count = 0
     flagged_count = 0
     records_processed = 0
+    seen_enrolments_in_batch = set()
 
-    batch = IntakeBatch(
-        id=str(uuid.uuid4()),
-        institution_id=inst.id,
-        batch_reference=batch_ref,
-        academic_year="2025-26",
-        filename=file.filename,
-        total_records=0,
-        valid_records=0,
-        flagged_records=0,
-        status="PROCESSED",
-        uploaded_at=now,
-    )
-    db.add(batch)
-    await db.flush()
-
-    for row in reader:
-        records_processed += 1
-        name = row.get("student_name", "").strip()
-        apaar = row.get("apaar_id", "").strip()
-        enr = row.get("enrolment_number", "").strip()
-
-        # Simulated APAAR verification outcome:
-        # If apaar starts with DEMO-APAAR and ends with even number: VERIFIED
-        # If ends with 3: PENDING
-        # If empty or ends with 9: MISMATCH
-        if not apaar:
-            apaar_status = "UNAVAILABLE"
-            integrity_status = "FLAGGED_FOR_REVIEW"
-            flagged_count += 1
-        elif apaar.endswith("3"):
-            apaar_status = "PENDING_VERIFICATION"
-            integrity_status = "FLAGGED_FOR_REVIEW"
-            flagged_count += 1
-        elif apaar.endswith("9"):
-            apaar_status = "MISMATCH"
-            integrity_status = "FLAGGED_FOR_REVIEW"
-            flagged_count += 1
-        else:
-            apaar_status = "VERIFIED"
-            integrity_status = "CLEARED"
-            valid_count += 1
-
-        student = StudentEnrolment(
+    try:
+        batch = IntakeBatch(
             id=str(uuid.uuid4()),
             institution_id=inst.id,
-            programme_id=prog.id if prog else inst.id,
-            student_name=f"{name} [DEMO]",
-            apaar_id=apaar,
-            apaar_status=apaar_status,
-            dob=row.get("dob", "2007-01-01"),
-            gender=row.get("gender", "Female"),
-            category=row.get("category", "General"),
-            quota=row.get("quota", "State Merit Quota"),
-            enrolment_number=enr or f"ENR-{uuid.uuid4().hex[:6].upper()}",
-            admission_date=row.get("admission_date", now.strftime("%Y-%m-%d")),
-            integrity_status=integrity_status,
-            version=1,
-            is_latest=True,
-            created_at=now,
+            batch_reference=batch_ref,
+            academic_year="2025-26",
+            filename=file.filename,
+            total_records=0,
+            valid_records=0,
+            flagged_records=0,
+            status="PROCESSED",
+            uploaded_at=now,
         )
-        db.add(student)
+        db.add(batch)
         await db.flush()
 
-        if integrity_status == "FLAGGED_FOR_REVIEW":
-            sig = IntegritySignal(
-                id=str(uuid.uuid4()),
-                student_id=student.id,
-                rule_code="R02_APAAR_MOCK_DISCREPANCY",
-                severity="MEDIUM",
-                finding_summary=f"Automated verification signal: APAAR status is {apaar_status}",
-                explanation=f"Simulated verification adapter returned status '{apaar_status}' for synthetic identifier '{apaar}'. Requires human reviewer verification.",
-                review_status="PENDING",
-                created_at=now,
-            )
-            db.add(sig)
+        for row in rows:
+            records_processed += 1
+            name = (row.get("student_name") or "").strip()
+            apaar = (row.get("apaar_id") or "").strip()
+            enr = (row.get("enrolment_number") or "").strip()
+            prog_name_in_row = (row.get("programme_name") or "").strip()
 
-    batch.total_records = records_processed
-    batch.valid_records = valid_count
-    batch.flagged_records = flagged_count
-    batch.status = "REVIEW_REQUIRED" if flagged_count > 0 else "COMPLETED"
+            # Match programme
+            matched_prog = default_prog
+            if prog_name_in_row:
+                for p in all_progs:
+                    if p.programme_name.lower() == prog_name_in_row.lower():
+                        matched_prog = p
+                        break
 
-    # Add audit log entry
-    thash = generate_tamper_hash("institution_admin@apex.edu", "BATCH_CSV_UPLOAD", f"intake_batches/{batch_ref}", now.isoformat())
-    audit_log = AuditLog(
-        id=str(uuid.uuid4()),
-        timestamp=now,
-        actor="institution_admin@apex.edu",
-        role="INSTITUTION_ADMIN",
-        action="BATCH_CSV_UPLOAD",
-        resource=f"intake_batches/{batch_ref}",
-        details_json=f'{{"filename": "{file.filename}", "total": {records_processed}, "valid": {valid_count}, "flagged": {flagged_count}}}',
-        tamper_hash=thash,
-    )
-    db.add(audit_log)
+            # Validate basic row completeness
+            if not name:
+                name = f"Unnamed Candidate #{records_processed}"
 
-    await db.commit()
+            # Simulated APAAR verification outcome:
+            # - If apaar empty: UNAVAILABLE (review flag, not fraud)
+            # - If apaar ends with 3: PENDING_VERIFICATION (review flag, not fraud)
+            # - If apaar ends with 9: MISMATCH (spelling anomaly review flag)
+            # - Otherwise: VERIFIED
+            is_flagged = False
+            if not apaar:
+                apaar_status = "UNAVAILABLE"
+                integrity_status = "FLAGGED_FOR_REVIEW"
+                flag_rule = "R02_APAAR_MOCK_DISCREPANCY"
+                flag_summary = "APAAR identifier not provided in admission roster"
+                flag_explanation = "Student record was submitted without a synthetic APAAR ID. Requires human reviewer triage to request identity documentation."
+                is_flagged = True
+            elif apaar.endswith("3"):
+                apaar_status = "PENDING_VERIFICATION"
+                integrity_status = "FLAGGED_FOR_REVIEW"
+                flag_rule = "R02_APAAR_PENDING_ACKNOWLEDGEMENT"
+                flag_summary = "APAAR ID verification handshake pending acknowledgment"
+                flag_explanation = f"Simulated verification adapter returned PENDING status for '{apaar}'. Note: Pending sync is an operational transition state, not fraud."
+                is_flagged = True
+            elif apaar.endswith("9"):
+                apaar_status = "MISMATCH"
+                integrity_status = "FLAGGED_FOR_REVIEW"
+                flag_rule = "R02_APAAR_NAME_DISCREPANCY"
+                flag_summary = "Identity name variation flagged between roster and simulated registry"
+                flag_explanation = f"Simulated registry returns phonetic spelling variation for '{name}' with APAAR '{apaar}'. Reviewer triage required."
+                is_flagged = True
+            else:
+                apaar_status = "VERIFIED"
+                integrity_status = "CLEARED"
+                flag_rule = None
+                flag_summary = ""
+                flag_explanation = ""
+
+            # Check for intra-batch duplicate enrolment
+            is_intra_batch_dup = False
+            effective_enr = enr
+            if not effective_enr:
+                effective_enr = f"ENR-{uuid.uuid4().hex[:6].upper()}"
+            elif effective_enr in seen_enrolments_in_batch:
+                # Intra-batch duplicate: differentiate enrolment key and flag as duplicate
+                is_intra_batch_dup = True
+                effective_enr = f"{effective_enr}-DUP{records_processed}"
+                integrity_status = "FLAGGED_FOR_REVIEW"
+                flag_rule = "R03_DUPLICATE_CONCURRENT_ENROLMENT"
+                flag_summary = f"Duplicate enrolment identifier '{enr}' detected in batch"
+                flag_explanation = f"Enrolment number '{enr}' appeared multiple times within the same CSV intake batch '{batch_ref}'. Flagged for deduplication review."
+                is_flagged = True
+            else:
+                seen_enrolments_in_batch.add(effective_enr)
+
+            # Check if student with this enrolment_number already exists in database
+            existing_student = None
+            if not is_intra_batch_dup and effective_enr:
+                existing_res = await db.execute(
+                    select(StudentEnrolment).where(StudentEnrolment.enrolment_number == effective_enr)
+                )
+                existing_student = existing_res.scalar_one_or_none()
+
+            if existing_student:
+                # Version existing student record instead of crashing with Unique Constraint
+                existing_student.version = (existing_student.version or 1) + 1
+                existing_student.student_name = f"{name} [DEMO]"
+                existing_student.dob = row.get("dob") or existing_student.dob
+                existing_student.gender = row.get("gender") or existing_student.gender
+                existing_student.category = row.get("category") or existing_student.category
+                existing_student.quota = row.get("quota") or existing_student.quota
+                existing_student.admission_date = row.get("admission_date") or existing_student.admission_date
+                existing_student.apaar_id = apaar or existing_student.apaar_id
+                existing_student.apaar_status = apaar_status
+                existing_student.updated_at = now
+
+                # If this re-upload introduces or modifies an issue, attach signal
+                if is_flagged:
+                    existing_student.integrity_status = "FLAGGED_FOR_REVIEW"
+                    sig = IntegritySignal(
+                        id=str(uuid.uuid4()),
+                        student_id=existing_student.id,
+                        rule_code=flag_rule or "R02_APAAR_MOCK_DISCREPANCY",
+                        severity="MEDIUM" if flag_rule != "R03_DUPLICATE_CONCURRENT_ENROLMENT" else "HIGH",
+                        finding_summary=flag_summary,
+                        explanation=flag_explanation,
+                        review_status="PENDING",
+                        created_at=now,
+                    )
+                    db.add(sig)
+                    flagged_count += 1
+                else:
+                    existing_student.integrity_status = "CLEARED"
+                    valid_count += 1
+            else:
+                # Create new student enrolment
+                student = StudentEnrolment(
+                    id=str(uuid.uuid4()),
+                    institution_id=inst.id,
+                    programme_id=matched_prog.id if matched_prog else inst.id,
+                    student_name=f"{name} [DEMO]",
+                    apaar_id=apaar,
+                    apaar_status=apaar_status,
+                    dob=row.get("dob") or "2007-01-01",
+                    gender=row.get("gender") or "Female",
+                    category=row.get("category") or "General",
+                    quota=row.get("quota") or "State Merit Quota",
+                    enrolment_number=effective_enr,
+                    admission_date=row.get("admission_date") or now.strftime("%Y-%m-%d"),
+                    integrity_status=integrity_status,
+                    version=1,
+                    is_latest=True,
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(student)
+                await db.flush()
+
+                if is_flagged:
+                    sig = IntegritySignal(
+                        id=str(uuid.uuid4()),
+                        student_id=student.id,
+                        rule_code=flag_rule or "R02_APAAR_MOCK_DISCREPANCY",
+                        severity="MEDIUM" if flag_rule != "R03_DUPLICATE_CONCURRENT_ENROLMENT" else "HIGH",
+                        finding_summary=flag_summary,
+                        explanation=flag_explanation,
+                        review_status="PENDING",
+                        created_at=now,
+                    )
+                    db.add(sig)
+                    flagged_count += 1
+                else:
+                    valid_count += 1
+
+        batch.total_records = records_processed
+        batch.valid_records = valid_count
+        batch.flagged_records = flagged_count
+        batch.status = "REVIEW_REQUIRED" if flagged_count > 0 else "COMPLETED"
+
+        # Add audit log entry
+        thash = generate_tamper_hash(
+            "institution_admin@apex.edu",
+            "BATCH_CSV_UPLOAD",
+            f"intake_batches/{batch_ref}",
+            now.isoformat()
+        )
+        audit_log = AuditLog(
+            id=str(uuid.uuid4()),
+            timestamp=now,
+            actor="institution_admin@apex.edu",
+            role="INSTITUTION_ADMIN",
+            action="BATCH_CSV_UPLOAD",
+            resource=f"intake_batches/{batch_ref}",
+            details_json=f'{{"filename": "{file.filename}", "total": {records_processed}, "valid": {valid_count}, "flagged": {flagged_count}}}',
+            tamper_hash=thash,
+        )
+        db.add(audit_log)
+
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        logger.error(f"Failed intake CSV upload transaction: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database transaction failure during intake processing: {str(exc)}",
+        )
 
     return {
         "success": True,
@@ -208,5 +338,5 @@ async def upload_intake_csv(
             "flagged_records": flagged_count,
             "status": batch.status,
         },
-        "message": f"Successfully processed intake batch {batch_ref} with {records_processed} synthetic student records.",
+        "message": f"Successfully processed intake batch {batch_ref} with {records_processed} synthetic student records ({valid_count} verified, {flagged_count} flagged for review).",
     }
