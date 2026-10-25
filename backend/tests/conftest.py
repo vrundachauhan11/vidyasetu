@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from app.main import app
 from app.database import AsyncSessionLocal
 from app.seed.demo_data import seed_demo_data_if_empty
+from app.modules.auth.security import create_access_token
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True)
@@ -22,7 +23,24 @@ async def initialize_test_database():
 
 @pytest_asyncio.fixture
 async def client():
-    """Yield an async test client using ASGI transport."""
+    """Yield an authenticated async test client with Council Regulator clearance."""
+    regulator_token = create_access_token(
+        user_id="usr_reg_01",
+        email="compliance.officer@aicte-gov.in",
+        role="REGULATOR_AICTE",
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={"Authorization": f"Bearer {regulator_token}"},
+    ) as ac:
+        yield ac
+
+
+@pytest_asyncio.fixture
+async def unauthenticated_client():
+    """Yield an unauthenticated async test client with no Authorization header."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
         yield ac

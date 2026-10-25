@@ -142,3 +142,24 @@ export interface UserProfile {
   institution_id: string;
   permissions: string[];
 }
+
+export interface LoginResponse {
+  success: boolean;
+  token: string;
+  token_type: string;
+  expires_in_minutes: number;
+  user: UserProfile;
+  demo_mode: boolean;
+  notice: string;
+}
+
+export interface DemoRoleInfo {
+  role: RoleType;
+  title: string;
+  name: string;
+  email: string;
+  demo_password: string;
+  institution: string;
+  description: string;
+  permissions: string[];
+}

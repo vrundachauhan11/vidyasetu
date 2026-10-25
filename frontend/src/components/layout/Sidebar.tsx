@@ -13,12 +13,16 @@ import {
   Settings as SettingsIcon,
   ShieldCheck,
   ChevronRight,
+  LogOut,
 } from 'lucide-react';
+import { UserProfile } from '../../types';
 
 interface SidebarProps {
   currentTab: string;
   onSelectTab: (tab: string) => void;
   reviewCount?: number;
+  currentUser?: UserProfile | null;
+  onLogout?: () => void;
 }
 
 interface NavItem {
@@ -28,14 +32,26 @@ interface NavItem {
   isDistinctStage?: boolean;
   stageBadge?: string;
   badgeCount?: number;
+  roleScope?: string;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, reviewCount = 0 }) => {
+export const Sidebar: React.FC<SidebarProps> = ({
+  currentTab,
+  onSelectTab,
+  reviewCount = 0,
+  currentUser,
+  onLogout,
+}) => {
   const navItems: NavItem[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
     { id: 'institutions', label: 'Institutions', icon: Building2 },
     { id: 'students', label: 'Student Records', icon: Users },
-    { id: 'intake', label: 'Data Intake', icon: UploadCloud },
+    {
+      id: 'intake',
+      label: 'Data Intake',
+      icon: UploadCloud,
+      roleScope: currentUser?.role === 'COMPLIANCE_REVIEWER' ? 'Read Only' : undefined,
+    },
     {
       id: 'apaar',
       label: 'APAAR Validation',
@@ -49,6 +65,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, revie
       label: 'Evidence & Review',
       icon: ClipboardCheck,
       badgeCount: reviewCount,
+      roleScope: currentUser?.role === 'INSTITUTION_ADMIN' ? 'Review Desk' : undefined,
     },
     { id: 'verification', label: 'Verification', icon: Award },
     { id: 'reports', label: 'Reports', icon: FileBarChart2 },
@@ -98,9 +115,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, revie
                   : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
               }`}
             >
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 min-w-0">
                 <Icon
-                  className={`w-4 h-4 transition-colors ${
+                  className={`w-4 h-4 shrink-0 transition-colors ${
                     isActive
                       ? 'text-white'
                       : item.isDistinctStage
@@ -111,7 +128,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, revie
                 <span className="truncate">{item.label}</span>
               </div>
 
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 shrink-0">
+                {item.roleScope && (
+                  <span className="text-[9px] px-1.5 py-0.2 rounded font-medium bg-slate-800 text-slate-400 border border-slate-700">
+                    {item.roleScope}
+                  </span>
+                )}
                 {item.stageBadge && (
                   <span
                     className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-medium ${
@@ -128,7 +150,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, revie
                     {item.badgeCount}
                   </span>
                 )}
-                {!isActive && !item.stageBadge && !item.badgeCount && (
+                {!isActive && !item.stageBadge && !item.badgeCount && !item.roleScope && (
                   <ChevronRight className="w-3.5 h-3.5 text-slate-600 opacity-0 group-hover:opacity-100 transition-opacity" />
                 )}
               </div>
@@ -137,13 +159,41 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, revie
         })}
       </div>
 
-      {/* Institutional Context & Disclaimer Footer */}
-      <div className="p-3 border-t border-slate-800/80 bg-slate-950/30">
-        <div className="bg-slate-800/60 rounded-lg p-2.5 border border-slate-700/50">
-          <div className="flex items-center justify-between text-[11px] text-slate-300 mb-1">
-            <span className="font-semibold text-white">SIH 2026 PS 26263</span>
+      {/* Authenticated User Capsule & Footer */}
+      <div className="p-3 border-t border-slate-800/80 bg-slate-950/40 space-y-2">
+        {currentUser && (
+          <div className="flex items-center justify-between p-2 rounded-lg bg-slate-800/50 border border-slate-700/60">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-7 h-7 rounded-full bg-blue-600/30 text-blue-300 border border-blue-500/40 flex items-center justify-center font-bold text-xs shrink-0">
+                {currentUser.name.charAt(0)}
+              </div>
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold text-slate-200 truncate leading-tight">
+                  {currentUser.name.split('(')[0]}
+                </p>
+                <p className="text-[9px] font-mono text-blue-400 truncate">
+                  {currentUser.role}
+                </p>
+              </div>
+            </div>
+            {onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                title="Log Out"
+                className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-slate-700/60 transition-colors"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        )}
+
+        <div className="bg-slate-800/40 rounded-lg p-2 border border-slate-700/40">
+          <div className="flex items-center justify-between text-[10px] text-slate-300 mb-0.5">
+            <span className="font-semibold text-slate-200">SIH 2026 PS 26263</span>
             <span className="text-[9px] bg-amber-500/20 text-amber-300 px-1 py-0.2 rounded border border-amber-500/30 font-mono">
-              DEMO MODE
+              PROTOTYPE
             </span>
           </div>
           <p className="text-[10px] text-slate-400 leading-tight">

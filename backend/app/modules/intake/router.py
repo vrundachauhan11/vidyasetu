@@ -11,6 +11,7 @@ from app.database import get_db
 from app.models import IntakeBatch, Institution, ProgrammeApproval, StudentEnrolment, IntegritySignal, AuditLog
 from app.seed.demo_data import generate_tamper_hash
 from app.logging_config import logger
+from app.modules.auth.security import UserProfile, require_roles
 
 router = APIRouter(prefix="/intake", tags=["Data Intake & Validation"])
 
@@ -60,6 +61,7 @@ async def upload_intake_csv(
     file: UploadFile = File(...),
     institution_id: str = "DEMO-AICTE-1-0091823",
     db: AsyncSession = Depends(get_db),
+    current_user: UserProfile = Depends(require_roles("INSTITUTION_ADMIN", "REGULATOR_AICTE")),
 ):
     """Upload and validate synthetic student roster CSV.
     Executes schema checks, deterministic rules, duplicate handling with record versioning, and creates intake batch.

@@ -9,6 +9,7 @@ interface AppLayoutProps {
   onSelectTab: (tab: string) => void;
   currentUser: UserProfile | null;
   onSwitchRole: (role: RoleType) => void;
+  onLogout: () => void;
   isBackendHealthy: boolean;
   reviewCount?: number;
 }
@@ -19,6 +20,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   onSelectTab,
   currentUser,
   onSwitchRole,
+  onLogout,
   isBackendHealthy,
   reviewCount = 0,
 }) => {
@@ -27,12 +29,15 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
       <Sidebar
         currentTab={currentTab}
         onSelectTab={onSelectTab}
+        currentUser={currentUser}
+        onLogout={onLogout}
         reviewCount={reviewCount}
       />
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <Topbar
           currentUser={currentUser}
           onSwitchRole={onSwitchRole}
+          onLogout={onLogout}
           isBackendHealthy={isBackendHealthy}
         />
         <main className="flex-1 overflow-y-auto p-6 md:p-8 bg-slate-50/70">

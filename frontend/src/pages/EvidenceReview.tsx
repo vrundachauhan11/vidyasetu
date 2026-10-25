@@ -1,10 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { ClipboardCheck, CheckCircle2, XCircle, FileSearch, ShieldCheck, AlertCircle, RefreshCw } from 'lucide-react';
-import { IntegritySignalItem } from '../types';
+import { IntegritySignalItem, UserProfile } from '../types';
 import { api } from '../services/api';
 import { MockBadge } from '../components/layout/MockBadge';
 
-export const EvidenceReview: React.FC = () => {
+interface EvidenceReviewProps {
+  currentUser?: UserProfile | null;
+}
+
+export const EvidenceReview: React.FC<EvidenceReviewProps> = ({ currentUser }) => {
+  const isAdjudicationAllowed = currentUser?.role === 'COMPLIANCE_REVIEWER' || currentUser?.role === 'REGULATOR_AICTE' || !currentUser;
   const [queue, setQueue] = useState<IntegritySignalItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
@@ -64,6 +69,21 @@ export const EvidenceReview: React.FC = () => {
           <RefreshCw className="w-3.5 h-3.5" /> Refresh Queue ({queue.length})
         </button>
       </div>
+
+      {/* Role Restriction Banner if Institution Admin */}
+      {!isAdjudicationAllowed && (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-3 text-amber-900 text-xs">
+          <div className="flex items-center gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>
+              <strong>Role Restriction:</strong> You are currently authenticated as <strong>{currentUser?.role}</strong>. Regulatory flag adjudication and resolution are restricted to <strong>Compliance Reviewers</strong> and <strong>AICTE Regulators</strong>. This queue is operating in institutional read-only mode.
+            </span>
+          </div>
+          <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-mono shrink-0">
+            AUDIT VIEW ONLY
+          </span>
+        </div>
+      )}
 
       {/* Confirmation Alert after action */}
       {lastActionResponse && (
@@ -156,8 +176,9 @@ export const EvidenceReview: React.FC = () => {
                 <div className="pt-2 flex flex-wrap items-center justify-end gap-2.5">
                   <button
                     onClick={() => handleDecision(item.id, 'DOCUMENT_VERIFIED')}
-                    disabled={isSubmitting}
-                    className="px-3.5 py-2 text-xs font-semibold text-cyan-800 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                    disabled={isSubmitting || !isAdjudicationAllowed}
+                    title={!isAdjudicationAllowed ? 'Adjudication restricted to Compliance Reviewers and AICTE Regulators' : undefined}
+                    className="px-3.5 py-2 text-xs font-semibold text-cyan-800 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <FileSearch className="w-3.5 h-3.5" />
                     Verify Secondary Certificate
@@ -165,8 +186,9 @@ export const EvidenceReview: React.FC = () => {
 
                   <button
                     onClick={() => handleDecision(item.id, 'RESOLVED_OVERRULED')}
-                    disabled={isSubmitting}
-                    className="px-3.5 py-2 text-xs font-semibold text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                    disabled={isSubmitting || !isAdjudicationAllowed}
+                    title={!isAdjudicationAllowed ? 'Adjudication restricted to Compliance Reviewers and AICTE Regulators' : undefined}
+                    className="px-3.5 py-2 text-xs font-semibold text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <XCircle className="w-3.5 h-3.5" />
                     Overrule (Require Correction)
@@ -174,8 +196,9 @@ export const EvidenceReview: React.FC = () => {
 
                   <button
                     onClick={() => handleDecision(item.id, 'RESOLVED_ACCEPTED')}
-                    disabled={isSubmitting}
-                    className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center gap-1.5 shadow-xs disabled:opacity-50"
+                    disabled={isSubmitting || !isAdjudicationAllowed}
+                    title={!isAdjudicationAllowed ? 'Adjudication restricted to Compliance Reviewers and AICTE Regulators' : undefined}
+                    className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center gap-1.5 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     {isSubmitting ? 'Recording Decision...' : 'Accept Institutional Justification'}

@@ -7,17 +7,41 @@ import {
   RuleDefinition,
   AuditLogItem,
   UserProfile,
+  LoginResponse,
+  DemoRoleInfo,
 } from '../types';
 
 const API_BASE = '/api';
+const TOKEN_STORAGE_KEY = 'vidyasetu_auth_token';
+
+export function getStoredToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(TOKEN_STORAGE_KEY);
+}
+
+export function setStoredToken(token: string): void {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  }
+}
+
+export function clearStoredToken(): void {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  }
+}
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
+  const token = getStoredToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options?.headers as Record<string, string>),
+  };
+
   const res = await fetch(`${API_BASE}${url}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
     ...options,
+    headers,
   });
 
   if (!res.ok) {
@@ -36,6 +60,11 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  // Auth Token Utilities
+  getToken: getStoredToken,
+  setToken: setStoredToken,
+  clearToken: clearStoredToken,
+
   // System Health & Version
   async getHealth() {
     return fetchJSON<{ status: string; database: { connected: boolean; dialect: string }; version: string }>('/health');
@@ -46,15 +75,44 @@ export const api = {
   },
 
   // Auth & RBAC
+  async login(payload: { email?: string; password?: string; role?: string }): Promise<LoginResponse> {
+    const data = await fetchJSON<LoginResponse>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    if (data.token) {
+      setStoredToken(data.token);
+    }
+    return data;
+  },
+
+  async logout(): Promise<void> {
+    try {
+      await fetchJSON('/auth/logout', { method: 'POST' });
+    } catch (err) {
+      console.warn('Logout endpoint call failed:', err);
+    } finally {
+      clearStoredToken();
+    }
+  },
+
   async getCurrentUser(): Promise<UserProfile> {
     return fetchJSON<UserProfile>('/auth/me');
   },
 
+  async getRoles(): Promise<DemoRoleInfo[]> {
+    return fetchJSON<DemoRoleInfo[]>('/auth/roles');
+  },
+
   async switchRole(role: string): Promise<UserProfile> {
-    return fetchJSON<UserProfile>('/auth/switch-role', {
+    const res = await fetchJSON<{ success: boolean; token: string; user: UserProfile }>('/auth/switch-role', {
       method: 'POST',
       body: JSON.stringify({ role }),
     });
+    if (res.token) {
+      setStoredToken(res.token);
+    }
+    return res.user;
   },
 
   // Dashboard Overview
@@ -88,12 +146,21 @@ export const api = {
   },
 
   async uploadCSV(file: File): Promise<any> {
+    const token = getStoredToken();
     const formData = new FormData();
     formData.append('file', file);
+
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const res = await fetch(`${API_BASE}/intake/upload`, {
       method: 'POST',
+      headers,
       body: formData,
     });
+
     if (!res.ok) {
       let errorMsg = `Upload failed (HTTP ${res.status})`;
       try {

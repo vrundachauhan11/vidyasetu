@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.database import get_db
 from app.models import IntegritySignal, StudentEnrolment, AuditLog
 from app.seed.demo_data import generate_tamper_hash
+from app.modules.auth.security import UserProfile, require_roles
 
 router = APIRouter(prefix="/review", tags=["Evidence & Reviewer Workflow"])
 
@@ -59,6 +60,7 @@ async def submit_review_decision(
     signal_id: str,
     payload: ReviewDecisionRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: UserProfile = Depends(require_roles("COMPLIANCE_REVIEWER", "REGULATOR_AICTE")),
 ):
     """Submit human reviewer decision, update record version, and log to cryptographic audit trail."""
     stmt = select(IntegritySignal).where(IntegritySignal.id == signal_id)
@@ -94,13 +96,15 @@ async def submit_review_decision(
         student.version += 1
         student.updated_at = now
 
-    # Append to tamper-evident audit log
-    thash = generate_tamper_hash(payload.reviewer_email, "SIGNAL_REVIEW_DECISION", f"integrity_signals/{signal_id}", now.isoformat())
+    # Append to tamper-evident audit log with authenticated actor identity
+    actor_email = current_user.email or payload.reviewer_email
+    actor_role = current_user.role or payload.reviewer_role
+    thash = generate_tamper_hash(actor_email, "SIGNAL_REVIEW_DECISION", f"integrity_signals/{signal_id}", now.isoformat())
     audit = AuditLog(
         id=str(uuid.uuid4()),
         timestamp=now,
-        actor=payload.reviewer_email,
-        role=payload.reviewer_role,
+        actor=actor_email,
+        role=actor_role,
         action="SIGNAL_REVIEW_DECISION",
         resource=f"integrity_signals/{signal_id}",
         details_json=f'{{"signal_id": "{signal_id}", "decision": "{payload.decision}", "notes": "{payload.reviewer_notes}", "rule": "{sig.rule_code}"}}',

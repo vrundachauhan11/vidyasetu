@@ -1,83 +1,134 @@
-"""Authentication & Role-Based Access Control (RBAC) Module."""
-from fastapi import APIRouter
-from pydantic import BaseModel
-from typing import List
+"""Authentication & Role-Based Access Control (RBAC) Module for VidyaSetu.
+Provides login, logout, token issuance, active user verification, and demo role switching.
+"""
+from typing import Optional, List, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
+
+from app.modules.auth.security import (
+    UserProfile,
+    DEMO_PERSONAS,
+    DEMO_PERSONAS_BY_EMAIL,
+    create_access_token,
+    get_current_user,
+    get_user_profile,
+)
 
 router = APIRouter(prefix="/auth", tags=["Authentication & RBAC"])
 
 
-class UserProfile(BaseModel):
-    user_id: str
-    email: str
-    name: str
-    role: str  # REGULATOR_AICTE, INSTITUTION_ADMIN, COMPLIANCE_REVIEWER, AUDITOR
-    institution_id: str = "DEMO-AICTE-1-0091823"
-    permissions: List[str]
+class LoginRequest(BaseModel):
+    email: Optional[str] = None
+    password: Optional[str] = None
+    role: Optional[str] = None  # Quick 1-click demo role option
 
 
-DEMO_USERS = {
-    "REGULATOR_AICTE": UserProfile(
-        user_id="usr_reg_01",
-        email="compliance.officer@aicte-gov.in",
-        name="Dr. V. K. Adhikari (AICTE Council Reviewer)",
-        role="REGULATOR_AICTE",
-        institution_id="ALL",
-        permissions=["view_all_institutions", "manage_rules", "triage_signals", "view_audit_trail", "export_reports"],
-    ),
-    "INSTITUTION_ADMIN": UserProfile(
-        user_id="usr_inst_01",
-        email="admin@apex-tech.edu",
-        name="Prof. Sunita Rao (Registrar, Apex Tech)",
-        role="INSTITUTION_ADMIN",
-        institution_id="DEMO-AICTE-1-0091823",
-        permissions=["upload_csv_batch", "view_own_students", "respond_to_signals", "view_own_audit"],
-    ),
-    "COMPLIANCE_REVIEWER": UserProfile(
-        user_id="usr_rev_01",
-        email="reviewer.desk@vidyasetu.local",
-        name="Er. Rajesh Pillai (Independent Compliance Evaluator)",
-        role="COMPLIANCE_REVIEWER",
-        institution_id="ALL",
-        permissions=["review_signals", "resolve_flags", "request_evidence"],
-    ),
-    "AUDITOR": UserProfile(
-        user_id="usr_aud_01",
-        email="auditor@cag-scrutiny.gov.in",
-        name="Smt. Neelam Sengupta (Auditor General)",
-        role="AUDITOR",
-        institution_id="ALL",
-        permissions=["view_audit_trail", "verify_hashes", "generate_compliance_audit"],
-    ),
-}
-
-current_active_role = "REGULATOR_AICTE"
+class LoginResponse(BaseModel):
+    success: bool = True
+    token: str
+    token_type: str = "Bearer"
+    expires_in_minutes: int
+    user: UserProfile
+    demo_mode: bool = True
+    notice: str = "DEMO CREDENTIALS ONLY - Prototype authentication for SIH 2026 PS 26263 evaluation."
 
 
 class SwitchRoleRequest(BaseModel):
     role: str
 
 
+class SwitchRoleResponse(BaseModel):
+    success: bool = True
+    token: str
+    token_type: str = "Bearer"
+    user: UserProfile
+
+
+@router.post("/login", response_model=LoginResponse)
+async def login(payload: LoginRequest):
+    """Authenticate user with demo credentials or 1-click demo persona selector."""
+    # 1. Option A: Quick demo role selector
+    if payload.role and payload.role in DEMO_PERSONAS:
+        persona = DEMO_PERSONAS[payload.role]
+        token = create_access_token(persona["user_id"], persona["email"], persona["role"])
+        return LoginResponse(
+            token=token,
+            expires_in_minutes=480,
+            user=get_user_profile(persona["role"]),
+        )
+
+    # 2. Option B: Email + Password verification
+    if payload.email and payload.password:
+        normalized_email = payload.email.strip().lower()
+        persona = DEMO_PERSONAS_BY_EMAIL.get(normalized_email)
+
+        # Constant-time comparison for safety
+        if persona and payload.password == persona["demo_password"]:
+            token = create_access_token(persona["user_id"], persona["email"], persona["role"])
+            return LoginResponse(
+                token=token,
+                expires_in_minutes=480,
+                user=get_user_profile(persona["role"]),
+            )
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid demo credentials. Please verify your email and demo password or use 1-click persona selection.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Please provide email and password, or select a valid demo persona role.",
+    )
+
+
+@router.post("/logout")
+async def logout(current_user: UserProfile = Depends(get_current_user)):
+    """Terminate the active prototype session."""
+    return {
+        "success": True,
+        "message": f"User {current_user.email} successfully logged out of VidyaSetu prototype session.",
+        "demo_mode": True,
+    }
+
+
 @router.get("/me", response_model=UserProfile)
-async def get_current_user():
-    """Retrieve current active authenticated user and RBAC profile."""
-    return DEMO_USERS.get(current_active_role, DEMO_USERS["REGULATOR_AICTE"])
+async def get_my_profile(current_user: UserProfile = Depends(get_current_user)):
+    """Retrieve current authenticated user and RBAC profile from Bearer token."""
+    return current_user
 
 
-@router.post("/switch-role", response_model=UserProfile)
-async def switch_demo_role(payload: SwitchRoleRequest):
-    """Switch active demo role for demonstration of role-specific workflows."""
-    global current_active_role
-    if payload.role in DEMO_USERS:
-        current_active_role = payload.role
-    return DEMO_USERS.get(current_active_role, DEMO_USERS["REGULATOR_AICTE"])
+@router.post("/switch-role", response_model=SwitchRoleResponse)
+async def switch_demo_role(payload: SwitchRoleRequest, current_user: UserProfile = Depends(get_current_user)):
+    """Switch active demo role for demonstration of role-specific workflows during hackathon evaluation."""
+    if payload.role not in DEMO_PERSONAS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown role '{payload.role}'. Available roles: {list(DEMO_PERSONAS.keys())}",
+        )
+
+    new_persona = DEMO_PERSONAS[payload.role]
+    new_token = create_access_token(new_persona["user_id"], new_persona["email"], new_persona["role"])
+    return SwitchRoleResponse(
+        token=new_token,
+        user=get_user_profile(new_persona["role"]),
+    )
 
 
 @router.get("/roles")
 async def list_available_roles():
-    """List available demo roles."""
+    """List available demo roles with clearly demarcated synthetic credentials for hackathon evaluation."""
     return [
-        {"role": "REGULATOR_AICTE", "title": "AICTE Council Regulator", "description": "National council-level view with policy oversight and rule management"},
-        {"role": "INSTITUTION_ADMIN", "title": "Institution Registrar", "description": "Campus intake upload, APAAR sync, and response to review signals"},
-        {"role": "COMPLIANCE_REVIEWER", "title": "Independent Compliance Reviewer", "description": "Triage desk for resolving integrity flags and evidence review"},
-        {"role": "AUDITOR", "title": "Regulatory Auditor", "description": "Read-only scrutiny of cryptographic audit trail and compliance history"},
+        {
+            "role": p["role"],
+            "title": p["role_title"],
+            "name": p["name"],
+            "email": p["email"],
+            "demo_password": p["demo_password"],
+            "institution": p["institution_name"],
+            "description": p["description"],
+            "permissions": p["permissions"],
+        }
+        for p in DEMO_PERSONAS.values()
     ]
