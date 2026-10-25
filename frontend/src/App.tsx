@@ -14,12 +14,41 @@ import { Settings } from './pages/Settings';
 import { RoleType, UserProfile, DashboardData } from './types';
 import { api } from './services/api';
 
+const VALID_TABS = [
+  'overview',
+  'institutions',
+  'students',
+  'intake',
+  'apaar',
+  'integrity',
+  'review',
+  'verification',
+  'reports',
+  'audit',
+  'settings',
+];
+
 export function App() {
-  const [currentTab, setCurrentTab] = useState<string>('overview');
+  const getInitialTab = () => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash.replace('#', '').trim();
+      if (VALID_TABS.includes(hash)) return hash;
+    }
+    return 'overview';
+  };
+
+  const [currentTab, setCurrentTab] = useState<string>(getInitialTab);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isBackendHealthy, setIsBackendHealthy] = useState<boolean>(false);
+
+  const handleSelectTab = (tab: string) => {
+    if (typeof window !== 'undefined') {
+      window.location.hash = tab;
+    }
+    setCurrentTab(tab);
+  };
 
   const loadInitialData = async () => {
     try {
@@ -49,7 +78,19 @@ export function App() {
   useEffect(() => {
     loadInitialData();
     const interval = setInterval(loadInitialData, 30000); // 30s background sync
-    return () => clearInterval(interval);
+
+    const onHashChange = () => {
+      const h = window.location.hash.replace('#', '').trim();
+      if (VALID_TABS.includes(h)) {
+        setCurrentTab(h);
+      }
+    };
+    window.addEventListener('hashchange', onHashChange);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('hashchange', onHashChange);
+    };
   }, []);
 
   const handleSwitchRole = async (role: RoleType) => {
@@ -74,7 +115,7 @@ export function App() {
       case 'apaar':
         return <ApaarValidation />;
       case 'integrity':
-        return <IntakeIntegrity onNavigateToReview={() => setCurrentTab('review')} />;
+        return <IntakeIntegrity onNavigateToReview={() => handleSelectTab('review')} />;
       case 'review':
         return <EvidenceReview />;
       case 'verification':
@@ -86,14 +127,14 @@ export function App() {
       case 'settings':
         return <Settings />;
       default:
-        return <Overview data={dashboardData} loading={loading} onNavigate={setCurrentTab} />;
+        return <Overview data={dashboardData} loading={loading} onNavigate={handleSelectTab} />;
     }
   };
 
   return (
     <AppLayout
       currentTab={currentTab}
-      onSelectTab={setCurrentTab}
+      onSelectTab={handleSelectTab}
       currentUser={currentUser}
       onSwitchRole={handleSwitchRole}
       isBackendHealthy={isBackendHealthy}
