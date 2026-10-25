@@ -46,7 +46,12 @@ export interface StudentRecord {
     rule_code: string;
     severity: SignalSeverity;
     finding_summary: string;
+    explanation?: string;
     review_status: string;
+    reviewer_decision?: string;
+    reviewer_notes?: string;
+    reviewed_at?: string;
+    created_at?: string;
   }[];
 }
 

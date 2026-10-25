@@ -78,7 +78,19 @@ async def submit_review_decision(
     student_res = await db.execute(student_stmt)
     student = student_res.scalar_one_or_none()
     if student:
-        student.integrity_status = "RESOLVED" if payload.decision.startswith("RESOLVED") else "DOCUMENT_VERIFIED"
+        # Check if student still has any other active pending signals
+        other_pending_res = await db.execute(
+            select(IntegritySignal).where(
+                IntegritySignal.student_id == sig.student_id,
+                IntegritySignal.id != sig.id,
+                IntegritySignal.review_status == "PENDING",
+            )
+        )
+        other_pending = other_pending_res.scalars().all()
+        if other_pending:
+            student.integrity_status = "FLAGGED_FOR_REVIEW"
+        else:
+            student.integrity_status = "RESOLVED" if payload.decision.startswith("RESOLVED") else "DOCUMENT_VERIFIED"
         student.version += 1
         student.updated_at = now
 

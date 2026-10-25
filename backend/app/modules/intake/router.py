@@ -166,29 +166,33 @@ async def upload_intake_csv(
                 name = f"Unnamed Candidate #{records_processed}"
 
             # Simulated APAAR verification outcome:
-            # - If apaar empty: UNAVAILABLE (review flag, not fraud)
-            # - If apaar ends with 3: PENDING_VERIFICATION (review flag, not fraud)
-            # - If apaar ends with 9: MISMATCH (spelling anomaly review flag)
+            # - If apaar empty: UNAVAILABLE (operational data gap, NOT fraud) -> R02_APAAR_UNAVAILABLE_IN_ROSTER (LOW)
+            # - If apaar ends with 3: PENDING_VERIFICATION (operational sync delay, NOT fraud) -> R02_APAAR_PENDING_ACKNOWLEDGEMENT (LOW)
+            # - If apaar ends with 9: MISMATCH (spelling anomaly review flag) -> R02_APAAR_NAME_DISCREPANCY (MEDIUM)
             # - Otherwise: VERIFIED
             is_flagged = False
+            flag_severity = "LOW"
             if not apaar:
                 apaar_status = "UNAVAILABLE"
                 integrity_status = "FLAGGED_FOR_REVIEW"
-                flag_rule = "R02_APAAR_MOCK_DISCREPANCY"
+                flag_rule = "R02_APAAR_UNAVAILABLE_IN_ROSTER"
+                flag_severity = "LOW"
                 flag_summary = "APAAR identifier not provided in admission roster"
-                flag_explanation = "Student record was submitted without a synthetic APAAR ID. Requires human reviewer triage to request identity documentation."
+                flag_explanation = "Student record was submitted without a synthetic APAAR ID. Requires administrative follow-up to obtain synthetic identity identifier. Note: Missing APAAR status alone is an operational data gap, not proof of fraud."
                 is_flagged = True
             elif apaar.endswith("3"):
                 apaar_status = "PENDING_VERIFICATION"
                 integrity_status = "FLAGGED_FOR_REVIEW"
                 flag_rule = "R02_APAAR_PENDING_ACKNOWLEDGEMENT"
+                flag_severity = "LOW"
                 flag_summary = "APAAR ID verification handshake pending acknowledgment"
-                flag_explanation = f"Simulated verification adapter returned PENDING status for '{apaar}'. Note: Pending sync is an operational transition state, not fraud."
+                flag_explanation = f"Simulated verification adapter returned PENDING status for '{apaar}'. Note: Pending sync is an operational transition state, not proof of fraud or discrepancy."
                 is_flagged = True
             elif apaar.endswith("9"):
                 apaar_status = "MISMATCH"
                 integrity_status = "FLAGGED_FOR_REVIEW"
                 flag_rule = "R02_APAAR_NAME_DISCREPANCY"
+                flag_severity = "MEDIUM"
                 flag_summary = "Identity name variation flagged between roster and simulated registry"
                 flag_explanation = f"Simulated registry returns phonetic spelling variation for '{name}' with APAAR '{apaar}'. Reviewer triage required."
                 is_flagged = True
@@ -196,6 +200,7 @@ async def upload_intake_csv(
                 apaar_status = "VERIFIED"
                 integrity_status = "CLEARED"
                 flag_rule = None
+                flag_severity = "LOW"
                 flag_summary = ""
                 flag_explanation = ""
 
@@ -210,6 +215,7 @@ async def upload_intake_csv(
                 effective_enr = f"{effective_enr}-DUP{records_processed}"
                 integrity_status = "FLAGGED_FOR_REVIEW"
                 flag_rule = "R03_DUPLICATE_CONCURRENT_ENROLMENT"
+                flag_severity = "HIGH"
                 flag_summary = f"Duplicate enrolment identifier '{enr}' detected in batch"
                 flag_explanation = f"Enrolment number '{enr}' appeared multiple times within the same CSV intake batch '{batch_ref}'. Flagged for deduplication review."
                 is_flagged = True
@@ -237,24 +243,67 @@ async def upload_intake_csv(
                 existing_student.apaar_status = apaar_status
                 existing_student.updated_at = now
 
-                # If this re-upload introduces or modifies an issue, attach signal
-                if is_flagged:
-                    existing_student.integrity_status = "FLAGGED_FOR_REVIEW"
-                    sig = IntegritySignal(
-                        id=str(uuid.uuid4()),
-                        student_id=existing_student.id,
-                        rule_code=flag_rule or "R02_APAAR_MOCK_DISCREPANCY",
-                        severity="MEDIUM" if flag_rule != "R03_DUPLICATE_CONCURRENT_ENROLMENT" else "HIGH",
-                        finding_summary=flag_summary,
-                        explanation=flag_explanation,
-                        review_status="PENDING",
-                        created_at=now,
-                    )
-                    db.add(sig)
-                    flagged_count += 1
+                # Query existing signals for this student to perform stable signal deduplication
+                sig_stmt = select(IntegritySignal).where(IntegritySignal.student_id == existing_student.id)
+                sig_res = await db.execute(sig_stmt)
+                existing_signals = sig_res.scalars().all()
+
+                active_signals = [s for s in existing_signals if s.review_status == "PENDING"]
+                resolved_signals = [s for s in existing_signals if s.review_status != "PENDING"]
+
+                if is_flagged and flag_rule:
+                    has_active = any(s.rule_code == flag_rule for s in active_signals)
+                    has_resolved = any(s.rule_code == flag_rule for s in resolved_signals)
+
+                    if has_active:
+                        # Signal already in pending queue; do not insert duplicate
+                        flagged_count += 1
+                        existing_student.integrity_status = "FLAGGED_FOR_REVIEW"
+                    elif has_resolved:
+                        # Prior review resolution exists for this finding condition.
+                        # Preserve reviewer decision and notes without resurrecting duplicate signal.
+                        if len(active_signals) > 0:
+                            existing_student.integrity_status = "FLAGGED_FOR_REVIEW"
+                            flagged_count += 1
+                        else:
+                            existing_student.integrity_status = "RESOLVED"
+                            valid_count += 1
+                    else:
+                        # Genuinely new finding on re-upload
+                        sig = IntegritySignal(
+                            id=str(uuid.uuid4()),
+                            student_id=existing_student.id,
+                            rule_code=flag_rule,
+                            severity=flag_severity,
+                            finding_summary=flag_summary,
+                            explanation=flag_explanation,
+                            review_status="PENDING",
+                            created_at=now,
+                        )
+                        db.add(sig)
+                        flagged_count += 1
+                        existing_student.integrity_status = "FLAGGED_FOR_REVIEW"
                 else:
-                    existing_student.integrity_status = "CLEARED"
-                    valid_count += 1
+                    # Clean/verified in current upload. Auto-resolve any pending APAAR flags if now verified.
+                    auto_resolved_any = False
+                    for s in active_signals:
+                        if s.rule_code in ("R02_APAAR_PENDING_ACKNOWLEDGEMENT", "R02_APAAR_UNAVAILABLE_IN_ROSTER", "R02_APAAR_NAME_DISCREPANCY"):
+                            s.review_status = "RESOLVED_VERIFIED"
+                            s.reviewer_decision = "AUTO_RESOLVED_BY_INSPECTION"
+                            s.reviewer_notes = "Automatically resolved: Student APAAR verification handshake completed successfully in subsequent intake roster."
+                            s.reviewed_at = now
+                            auto_resolved_any = True
+
+                    remaining_active = [s for s in active_signals if s.review_status == "PENDING"]
+                    if remaining_active:
+                        existing_student.integrity_status = "FLAGGED_FOR_REVIEW"
+                        flagged_count += 1
+                    elif resolved_signals or auto_resolved_any:
+                        existing_student.integrity_status = "RESOLVED"
+                        valid_count += 1
+                    else:
+                        existing_student.integrity_status = "CLEARED"
+                        valid_count += 1
             else:
                 # Create new student enrolment
                 student = StudentEnrolment(
@@ -279,12 +328,12 @@ async def upload_intake_csv(
                 db.add(student)
                 await db.flush()
 
-                if is_flagged:
+                if is_flagged and flag_rule:
                     sig = IntegritySignal(
                         id=str(uuid.uuid4()),
                         student_id=student.id,
-                        rule_code=flag_rule or "R02_APAAR_MOCK_DISCREPANCY",
-                        severity="MEDIUM" if flag_rule != "R03_DUPLICATE_CONCURRENT_ENROLMENT" else "HIGH",
+                        rule_code=flag_rule,
+                        severity=flag_severity,
                         finding_summary=flag_summary,
                         explanation=flag_explanation,
                         review_status="PENDING",

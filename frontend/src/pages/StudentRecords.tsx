@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Users, Search, Filter, ShieldAlert, CheckCircle2, Clock, XCircle, Eye, Info } from 'lucide-react';
+import { Users, Search, Filter, ShieldAlert, CheckCircle2, Clock, XCircle, Eye, Info, AlertCircle, History } from 'lucide-react';
 import { StudentRecord } from '../types';
 import { api } from '../services/api';
 import { MockBadge } from '../components/layout/MockBadge';
@@ -167,6 +167,12 @@ export const StudentRecords: React.FC = () => {
                           Mismatch
                         </span>
                       )}
+                      {st.apaar_status === 'UNAVAILABLE' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200">
+                          <AlertCircle className="w-3 h-3 text-slate-500" />
+                          Missing / Roster
+                        </span>
+                      )}
                     </td>
                     <td className="py-3 px-4">
                       {st.integrity_status === 'CLEARED' && (
@@ -183,6 +189,12 @@ export const StudentRecords: React.FC = () => {
                       {st.integrity_status === 'RESOLVED' && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-blue-50 text-blue-700 border border-blue-200">
                           Resolved
+                        </span>
+                      )}
+                      {st.integrity_status === 'DOCUMENT_VERIFIED' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                          Doc Verified
                         </span>
                       )}
                     </td>
@@ -207,73 +219,161 @@ export const StudentRecords: React.FC = () => {
       </div>
 
       {/* Detail Modal / Drawer */}
-      {selectedStudent && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4 border border-slate-200">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div>
-                <h3 className="font-bold text-slate-900 text-base">{selectedStudent.student_name}</h3>
-                <p className="text-xs text-slate-500 font-mono">Enrolment: {selectedStudent.enrolment_number}</p>
-              </div>
-              <button
-                onClick={() => setSelectedStudent(null)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded"
-              >
-                ✕
-              </button>
-            </div>
+      {selectedStudent && (() => {
+        const activeSignals = selectedStudent.signals?.filter((s) => s.review_status === 'PENDING') || [];
+        const resolvedSignals = selectedStudent.signals?.filter((s) => s.review_status !== 'PENDING') || [];
 
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="p-2.5 bg-slate-50 rounded-lg">
-                <span className="text-slate-400 block text-[10px] uppercase">Programme</span>
-                <span className="font-semibold text-slate-800">{selectedStudent.programme_name}</span>
+        return (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4 border border-slate-200 max-h-[88vh] overflow-y-auto">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base">{selectedStudent.student_name}</h3>
+                  <p className="text-xs text-slate-500 font-mono">Enrolment: {selectedStudent.enrolment_number}</p>
+                </div>
+                <button
+                  onClick={() => setSelectedStudent(null)}
+                  className="text-slate-400 hover:text-slate-600 p-1 rounded"
+                >
+                  ✕
+                </button>
               </div>
-              <div className="p-2.5 bg-slate-50 rounded-lg">
-                <span className="text-slate-400 block text-[10px] uppercase">APAAR ID</span>
-                <span className="font-mono font-semibold text-slate-800">
-                  {selectedStudent.apaar_id || 'Not Provided'}
-                </span>
-              </div>
-              <div className="p-2.5 bg-slate-50 rounded-lg">
-                <span className="text-slate-400 block text-[10px] uppercase">Quota Category</span>
-                <span className="font-semibold text-slate-800">{selectedStudent.quota} ({selectedStudent.category})</span>
-              </div>
-              <div className="p-2.5 bg-slate-50 rounded-lg">
-                <span className="text-slate-400 block text-[10px] uppercase">Admission Date</span>
-                <span className="font-semibold text-slate-800">{selectedStudent.admission_date}</span>
-              </div>
-            </div>
 
-            {selectedStudent.signals && selectedStudent.signals.length > 0 && (
-              <div className="pt-2">
-                <h4 className="text-xs font-bold text-slate-800 mb-2">Attached Integrity Signals:</h4>
-                <div className="space-y-2">
-                  {selectedStudent.signals.map((sig) => (
-                    <div key={sig.id} className="p-3 bg-amber-50/70 border border-amber-200 rounded-lg text-xs space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="font-mono font-bold text-amber-900">{sig.rule_code}</span>
-                        <span className="font-semibold text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
-                          {sig.severity} Severity
-                        </span>
-                      </div>
-                      <p className="text-amber-800 leading-snug">{sig.finding_summary}</p>
-                    </div>
-                  ))}
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="p-2.5 bg-slate-50 rounded-lg">
+                  <span className="text-slate-400 block text-[10px] uppercase">Programme</span>
+                  <span className="font-semibold text-slate-800">{selectedStudent.programme_name}</span>
+                </div>
+                <div className="p-2.5 bg-slate-50 rounded-lg">
+                  <span className="text-slate-400 block text-[10px] uppercase">APAAR ID</span>
+                  <span className="font-mono font-semibold text-slate-800">
+                    {selectedStudent.apaar_id || 'Not Provided'}
+                  </span>
+                </div>
+                <div className="p-2.5 bg-slate-50 rounded-lg">
+                  <span className="text-slate-400 block text-[10px] uppercase">Quota Category</span>
+                  <span className="font-semibold text-slate-800">{selectedStudent.quota} ({selectedStudent.category})</span>
+                </div>
+                <div className="p-2.5 bg-slate-50 rounded-lg">
+                  <span className="text-slate-400 block text-[10px] uppercase">Admission Date</span>
+                  <span className="font-semibold text-slate-800">{selectedStudent.admission_date}</span>
                 </div>
               </div>
-            )}
 
-            <div className="pt-3 border-t border-slate-100 flex justify-end">
-              <button
-                onClick={() => setSelectedStudent(null)}
-                className="px-4 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700"
-              >
-                Close
-              </button>
+              {/* Integrity Signals & Review History */}
+              <div className="pt-2 space-y-3">
+                {/* Active Signals Section */}
+                {activeSignals.length > 0 ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                        <ShieldAlert className="w-3.5 h-3.5 text-amber-600" />
+                        Active Integrity Signals ({activeSignals.length})
+                      </h4>
+                      <span className="text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 font-medium">
+                        Requires Triage
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {activeSignals.map((sig) => (
+                        <div key={sig.id} className="p-3 bg-amber-50/70 border border-amber-200 rounded-lg text-xs space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono font-bold text-amber-900">{sig.rule_code}</span>
+                            <span
+                              className={`font-semibold text-[10px] px-1.5 py-0.5 rounded ${
+                                sig.severity === 'HIGH'
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : sig.severity === 'MEDIUM'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-blue-100 text-blue-800'
+                              }`}
+                            >
+                              {sig.severity} Severity
+                            </span>
+                          </div>
+                          <p className="text-amber-900 font-medium leading-snug">{sig.finding_summary}</p>
+                          {sig.explanation && (
+                            <p className="text-slate-600 text-[11px] leading-relaxed bg-white/80 p-2 rounded border border-amber-100">
+                              {sig.explanation}
+                            </p>
+                          )}
+                          {sig.created_at && (
+                            <div className="text-[10px] text-slate-400 font-mono pt-0.5">
+                              Logged: {new Date(sig.created_at).toLocaleString()}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-emerald-50/80 border border-emerald-200 rounded-lg flex items-start gap-2.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <div>
+                      <h5 className="text-xs font-semibold text-emerald-900">No Active Review Signals</h5>
+                      <p className="text-[11px] text-emerald-700 leading-snug">
+                        This student record currently has no pending integrity findings. Operational standing is cleared or resolved.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Resolved Historical Signals Section */}
+                {resolvedSignals.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-slate-100">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                        <History className="w-3.5 h-3.5 text-blue-600" />
+                        Resolution & Audit History ({resolvedSignals.length})
+                      </h4>
+                      <span className="text-[10px] text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 font-medium">
+                        Audit Trail
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {resolvedSignals.map((sig) => (
+                        <div key={sig.id} className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono font-semibold text-slate-700">{sig.rule_code}</span>
+                            <span className="font-semibold text-[10px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              {sig.reviewer_decision || sig.review_status}
+                            </span>
+                          </div>
+                          <p className="text-slate-700 leading-snug">{sig.finding_summary}</p>
+                          {(sig.reviewer_notes || sig.reviewer_decision) && (
+                            <div className="p-2.5 bg-blue-50/70 border border-blue-100 rounded text-[11px] space-y-1">
+                              <div className="flex items-center justify-between text-blue-900 font-medium">
+                                <span>Reviewer Determination:</span>
+                                {sig.reviewed_at && (
+                                  <span className="text-[10px] text-blue-600 font-mono">
+                                    {new Date(sig.reviewed_at).toLocaleDateString()}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-blue-800 italic">
+                                "{sig.reviewer_notes || 'Institutional justification verified and accepted.'}"
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex justify-end">
+                <button
+                  onClick={() => setSelectedStudent(null)}
+                  className="px-4 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

@@ -16,6 +16,7 @@ from app.core.errors import (
     global_exception_handler,
 )
 from app.seed.demo_data import seed_demo_data_if_empty
+from app.modules.intake.deduplicate import deduplicate_existing_signals
 
 # Module Routers
 from app.modules.auth.router import router as auth_router
@@ -41,8 +42,9 @@ async def lifespan(app: FastAPI):
     try:
         async with AsyncSessionLocal() as session:
             await seed_demo_data_if_empty(session)
+            await deduplicate_existing_signals(session)
     except Exception as exc:
-        logger.warning(f"Initial DB seed skipped or deferred: {exc}")
+        logger.warning(f"Initial DB seed / deduplication check skipped or deferred: {exc}")
     yield
     logger.info("Shutting down VidyaSetu API gracefully.")
 

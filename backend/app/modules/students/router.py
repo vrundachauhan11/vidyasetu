@@ -75,9 +75,14 @@ async def list_students(
                         "rule_code": s.rule_code,
                         "severity": s.severity,
                         "finding_summary": s.finding_summary,
+                        "explanation": s.explanation,
                         "review_status": s.review_status,
+                        "reviewer_decision": s.reviewer_decision,
+                        "reviewer_notes": s.reviewer_notes,
+                        "reviewed_at": s.reviewed_at.isoformat() if s.reviewed_at else None,
+                        "created_at": s.created_at.isoformat() if s.created_at else None,
                     }
-                    for s in r.signals
+                    for s in sorted(r.signals, key=lambda x: str(x.created_at or ""), reverse=True)
                 ],
             }
             for r in records
@@ -138,8 +143,10 @@ async def get_student(student_id: str, db: AsyncSession = Depends(get_db)):
                     "review_status": s.review_status,
                     "reviewer_decision": s.reviewer_decision,
                     "reviewer_notes": s.reviewer_notes,
+                    "reviewed_at": s.reviewed_at.isoformat() if s.reviewed_at else None,
+                    "created_at": s.created_at.isoformat() if s.created_at else None,
                 }
-                for s in student.signals
+                for s in sorted(student.signals, key=lambda x: str(x.created_at or ""), reverse=True)
             ],
         },
     }
