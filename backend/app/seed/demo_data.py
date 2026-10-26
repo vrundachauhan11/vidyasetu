@@ -77,8 +77,8 @@ async def seed_demo_data_if_empty(session: AsyncSession) -> bool:
         programme_name="B.Tech Computer Science and Engineering",
         degree_level="Undergraduate",
         academic_year="2025-26",
-        sanctioned_intake=120,
-        approved_quota_details="State Quota 85% (102), Management Quota 15% (18)",
+        sanctioned_intake=300,
+        approved_quota_details="State Quota 85% (255), Management Quota 15% (45)",
         created_at=now,
     )
     prog2 = ProgrammeApproval(
@@ -101,7 +101,17 @@ async def seed_demo_data_if_empty(session: AsyncSession) -> bool:
         approved_quota_details="State Merit 85% (51), All India Quota 15% (9)",
         created_at=now,
     )
-    session.add_all([prog1, prog2, prog3])
+    prog4 = ProgrammeApproval(
+        id=str(uuid.uuid4()),
+        institution_id=inst1.id,
+        programme_name="B.Tech Artificial Intelligence & Data Science",
+        degree_level="Undergraduate",
+        academic_year="2025-26",
+        sanctioned_intake=2,
+        approved_quota_details="State Quota 100% (2 seats) [DEMO CAPACITY TEST]",
+        created_at=now,
+    )
+    session.add_all([prog1, prog2, prog3, prog4])
     await session.flush()
 
     # 3. Intake Batches

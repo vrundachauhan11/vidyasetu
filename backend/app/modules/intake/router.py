@@ -258,7 +258,7 @@ async def upload_intake_csv(
 
             # 4. Check if student with this enrolment_number already exists in database
             existing_student = None
-            if not is_intra_batch_dup and effective_enr:
+            if effective_enr:
                 existing_res = await db.execute(
                     select(StudentEnrolment).where(StudentEnrolment.enrolment_number == effective_enr)
                 )
@@ -277,10 +277,11 @@ async def upload_intake_csv(
                         f"Enrolment sequence #{curr_prog_count} exceeds approved capacity of {matched_prog.sanctioned_intake} seats for '{matched_prog.programme_name}'. Sourced from institutional programme approval [DEMO CONFIGURATION]. Triage required to verify supernumerary or quota allocation."
                     ))
 
+            display_name = name if name.endswith("[DEMO]") else f"{name} [DEMO]"
             if existing_student:
                 # Version existing student record instead of crashing with Unique Constraint
                 existing_student.version = (existing_student.version or 1) + 1
-                existing_student.student_name = f"{name} [DEMO]"
+                existing_student.student_name = display_name
                 existing_student.dob = row.get("dob") or existing_student.dob
                 existing_student.gender = row.get("gender") or existing_student.gender
                 existing_student.category = row.get("category") or existing_student.category
@@ -342,7 +343,7 @@ async def upload_intake_csv(
                     id=str(uuid.uuid4()),
                     institution_id=inst.id,
                     programme_id=matched_prog.id if matched_prog else inst.id,
-                    student_name=f"{name} [DEMO]",
+                    student_name=display_name,
                     apaar_id=apaar,
                     apaar_status=apaar_status,
                     dob=row.get("dob") or "2007-01-01",
