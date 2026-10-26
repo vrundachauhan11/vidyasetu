@@ -60,6 +60,7 @@ async def list_intake_batches(db: AsyncSession = Depends(get_db)):
 async def upload_intake_csv(
     file: UploadFile = File(...),
     institution_id: str = "DEMO-AICTE-1-0091823",
+    academic_year: str = "2025-26",
     db: AsyncSession = Depends(get_db),
     current_user: UserProfile = Depends(require_roles("INSTITUTION_ADMIN", "REGULATOR_AICTE")),
 ):
@@ -146,7 +147,7 @@ async def upload_intake_csv(
             id=str(uuid.uuid4()),
             institution_id=inst.id,
             batch_reference=batch_ref,
-            academic_year="2025-26",
+            academic_year=academic_year or "2025-26",
             filename=file.filename,
             total_records=0,
             valid_records=0,
@@ -163,14 +164,20 @@ async def upload_intake_csv(
             apaar = (row.get("apaar_id") or "").strip()
             enr = (row.get("enrolment_number") or "").strip()
             prog_name_in_row = (row.get("programme_name") or "").strip()
+            row_ay = (row.get("academic_year") or academic_year or "2025-26").strip()
 
-            # Match programme
+            # Match programme by institution, programme name, and academic year
             matched_prog = default_prog
             if prog_name_in_row:
                 for p in all_progs:
-                    if p.programme_name.lower() == prog_name_in_row.lower():
+                    if p.programme_name.lower() == prog_name_in_row.lower() and p.academic_year == row_ay:
                         matched_prog = p
                         break
+                else:
+                    for p in all_progs:
+                        if p.programme_name.lower() == prog_name_in_row.lower():
+                            matched_prog = p
+                            break
 
             # Validate basic row completeness
             if not name:
@@ -273,8 +280,8 @@ async def upload_intake_csv(
                     findings.append((
                         "R01_SANCTIONED_INTAKE_EXCEEDED",
                         "HIGH",
-                        f"Enrolment exceeds sanctioned intake limit of {matched_prog.sanctioned_intake} seats [DEMO CONFIGURATION]",
-                        f"Enrolment sequence #{curr_prog_count} exceeds approved capacity of {matched_prog.sanctioned_intake} seats for '{matched_prog.programme_name}'. Sourced from institutional programme approval [DEMO CONFIGURATION]. Triage required to verify supernumerary or quota allocation."
+                        f"Enrolment exceeds sanctioned intake limit of {matched_prog.sanctioned_intake} seats ({matched_prog.academic_year}) [DEMO CONFIGURATION]",
+                        f"Enrolment sequence #{curr_prog_count} exceeds approved capacity of {matched_prog.sanctioned_intake} seats for '{matched_prog.programme_name}' ({matched_prog.academic_year}). Sourced from institutional programme approval [DEMO CONFIGURATION]. Triage required to verify supernumerary or quota allocation."
                     ))
 
             display_name = name if name.endswith("[DEMO]") else f"{name} [DEMO]"

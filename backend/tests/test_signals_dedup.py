@@ -7,14 +7,17 @@ from sqlalchemy import select
 
 
 @pytest.mark.asyncio
-async def test_signal_deduplication_on_repeated_upload(client):
+async def test_signal_deduplication_on_repeated_upload(client, create_isolated_programme):
     """Uploading the same CSV multiple times does not produce duplicate active signals."""
     unique_suffix = uuid.uuid4().hex[:6].upper()
+    prog_name = f"B.Tech CSE Dedup {unique_suffix}"
+    await create_isolated_programme(prog_name, sanctioned_intake=50)
+
     test_enr = f"ENR-DEDUP-{unique_suffix}"
     test_apaar = f"DEMO-APAAR-2026-DED{unique_suffix[:3]}3"
 
     csv_data = f"""student_name,apaar_id,dob,gender,category,quota,enrolment_number,admission_date,programme_name
-Kavya Deshmukh,{test_apaar},2006-09-12,Female,General,State Merit Quota,{test_enr},2025-08-16,B.Tech Computer Science and Engineering
+Kavya Deshmukh,{test_apaar},2006-09-12,Female,General,State Merit Quota,{test_enr},2025-08-16,{prog_name}
 """
 
     # 1. First upload
@@ -48,14 +51,17 @@ Kavya Deshmukh,{test_apaar},2006-09-12,Female,General,State Merit Quota,{test_en
 
 
 @pytest.mark.asyncio
-async def test_resolved_findings_remain_resolved_after_reupload(client):
+async def test_resolved_findings_remain_resolved_after_reupload(client, create_isolated_programme):
     """A human reviewer resolution is preserved and does not revert to FLAGGED or create duplicates on re-upload."""
     unique_suffix = uuid.uuid4().hex[:6].upper()
+    prog_name = f"B.Tech CSE Resolve {unique_suffix}"
+    await create_isolated_programme(prog_name, sanctioned_intake=50)
+
     test_enr = f"ENR-RESOLVE-{unique_suffix}"
     test_apaar = f"DEMO-APAAR-2026-RES{unique_suffix[:3]}3"
 
     csv_data = f"""student_name,apaar_id,dob,gender,category,quota,enrolment_number,admission_date,programme_name
-Tarun TestCandidate,{test_apaar},2006-05-18,Male,SC,State Merit Quota,{test_enr},2025-08-17,B.Tech Computer Science and Engineering
+Tarun TestCandidate,{test_apaar},2006-05-18,Male,SC,State Merit Quota,{test_enr},2025-08-17,{prog_name}
 """
 
     # Initial upload
@@ -106,14 +112,17 @@ Tarun TestCandidate,{test_apaar},2006-05-18,Male,SC,State Merit Quota,{test_enr}
 
 
 @pytest.mark.asyncio
-async def test_scenario_enrolment_within_approved_intake(client):
+async def test_scenario_enrolment_within_approved_intake(client, create_isolated_programme):
     """Scenario 1: Student enrolment with verified APAAR within sanctioned intake is CLEARED with 0 signals."""
     unique_suffix = uuid.uuid4().hex[:6].upper()
+    prog_name = f"B.Tech CSE Clean {unique_suffix}"
+    await create_isolated_programme(prog_name, sanctioned_intake=50)
+
     test_enr = f"ENR-CLEAN-{unique_suffix}"
     test_apaar = f"DEMO-APAAR-2026-CLN{unique_suffix[:3]}0"  # ends with 0 -> VERIFIED
 
     csv_data = f"""student_name,apaar_id,dob,gender,category,quota,enrolment_number,admission_date,programme_name
-Valid Candidate,{test_apaar},2007-04-12,Female,General,State Merit Quota,{test_enr},2025-08-16,B.Tech Computer Science and Engineering
+Valid Candidate,{test_apaar},2007-04-12,Female,General,State Merit Quota,{test_enr},2025-08-16,{prog_name}
 """
     files = {"file": ("clean.csv", csv_data.encode("utf-8"), "text/csv")}
     resp = await client.post("/api/intake/upload", files=files)
@@ -127,13 +136,37 @@ Valid Candidate,{test_apaar},2007-04-12,Female,General,State Merit Quota,{test_e
 
 
 @pytest.mark.asyncio
-async def test_scenario_enrolment_exceeding_configured_intake(client):
+async def test_scenario_enrolment_exceeding_configured_intake(client, create_isolated_programme):
     """Scenario 2: Enrolment exceeding programme approved capacity triggers R01_SANCTIONED_INTAKE_EXCEEDED."""
-    import uuid
-    # Create or identify a test programme with low capacity to cleanly trigger R01
     suffix = uuid.uuid4().hex[:6].upper()
+    prog_name = f"B.Tech CSE LowCap {suffix}"
+    # Dedicated isolated programme configured with sanctioned intake limit of exactly 1 seat
+    await create_isolated_programme(prog_name, sanctioned_intake=1)
+
     enr1 = f"ENR-CAP1-{suffix}"
+    enr2 = f"ENR-CAP2-{suffix}"
     apaar1 = f"DEMO-APAAR-2026-CP1{suffix[:3]}0"
+    apaar2 = f"DEMO-APAAR-2026-CP2{suffix[:3]}0"
+
+    csv_data = f"""student_name,apaar_id,dob,gender,category,quota,enrolment_number,admission_date,programme_name
+Candidate Within Capacity,{apaar1},2007-01-01,Female,General,State Merit Quota,{enr1},2025-08-16,{prog_name}
+Candidate Exceeding Intake,{apaar2},2007-01-02,Male,General,State Merit Quota,{enr2},2025-08-16,{prog_name}
+"""
+    files = {"file": ("capacity_test.csv", csv_data.encode("utf-8"), "text/csv")}
+    resp = await client.post("/api/intake/upload", files=files)
+    assert resp.status_code == 200
+
+    # Candidate 1 (sequence 1 <= 1) is cleared
+    res1 = await client.get(f"/api/students?search={enr1}")
+    st1 = res1.json()["data"][0]
+    assert st1["integrity_status"] == "CLEARED"
+    assert len(st1["signals"]) == 0
+
+    # Candidate 2 (sequence 2 > 1) is flagged for exceeding approved capacity
+    res2 = await client.get(f"/api/students?search={enr2}")
+    st2 = res2.json()["data"][0]
+    assert st2["integrity_status"] == "FLAGGED_FOR_REVIEW"
+    assert any(s["rule_code"] == "R01_SANCTIONED_INTAKE_EXCEEDED" for s in st2["signals"])
 
     # Verify R01 exists in registered rules with verified statutory reference
     rules_resp = await client.get("/api/rules")
@@ -145,16 +178,19 @@ async def test_scenario_enrolment_exceeding_configured_intake(client):
 
 
 @pytest.mark.asyncio
-async def test_scenario_duplicate_enrolment_number(client):
+async def test_scenario_duplicate_enrolment_number(client, create_isolated_programme):
     """Scenario 3: Duplicate enrolment number in batch triggers R03_DUPLICATE_CONCURRENT_ENROLMENT."""
     suffix = uuid.uuid4().hex[:6].upper()
+    prog_name = f"B.Tech CSE DupEnr {suffix}"
+    await create_isolated_programme(prog_name, sanctioned_intake=50)
+
     dup_enr = f"ENR-DUP-{suffix}"
     apaar1 = f"DEMO-APAAR-2026-D1{suffix[:3]}0"
     apaar2 = f"DEMO-APAAR-2026-D2{suffix[:3]}0"
 
     csv_data = f"""student_name,apaar_id,dob,gender,category,quota,enrolment_number,admission_date,programme_name
-Candidate First,{apaar1},2007-01-01,Female,General,State Merit Quota,{dup_enr},2025-08-16,B.Tech Computer Science and Engineering
-Candidate Second,{apaar2},2007-01-02,Male,General,State Merit Quota,{dup_enr},2025-08-16,B.Tech Computer Science and Engineering
+Candidate First,{apaar1},2007-01-01,Female,General,State Merit Quota,{dup_enr},2025-08-16,{prog_name}
+Candidate Second,{apaar2},2007-01-02,Male,General,State Merit Quota,{dup_enr},2025-08-16,{prog_name}
 """
     files = {"file": ("dup_enr.csv", csv_data.encode("utf-8"), "text/csv")}
     resp = await client.post("/api/intake/upload", files=files)
@@ -172,16 +208,19 @@ Candidate Second,{apaar2},2007-01-02,Male,General,State Merit Quota,{dup_enr},20
 
 
 @pytest.mark.asyncio
-async def test_scenario_duplicate_synthetic_apaar(client):
+async def test_scenario_duplicate_synthetic_apaar(client, create_isolated_programme):
     """Scenario 4: Duplicate synthetic APAAR identifier across different enrolment numbers triggers R03."""
     suffix = uuid.uuid4().hex[:6].upper()
+    prog_name = f"B.Tech CSE DupApaar {suffix}"
+    await create_isolated_programme(prog_name, sanctioned_intake=50)
+
     shared_apaar = f"DEMO-APAAR-2026-SHR{suffix[:3]}0"
     enr1 = f"ENR-SHR1-{suffix}"
     enr2 = f"ENR-SHR2-{suffix}"
 
     csv_data = f"""student_name,apaar_id,dob,gender,category,quota,enrolment_number,admission_date,programme_name
-Student One,{shared_apaar},2007-02-01,Female,General,State Merit Quota,{enr1},2025-08-16,B.Tech Computer Science and Engineering
-Student Two,{shared_apaar},2007-02-02,Male,General,State Merit Quota,{enr2},2025-08-16,B.Tech Computer Science and Engineering
+Student One,{shared_apaar},2007-02-01,Female,General,State Merit Quota,{enr1},2025-08-16,{prog_name}
+Student Two,{shared_apaar},2007-02-02,Male,General,State Merit Quota,{enr2},2025-08-16,{prog_name}
 """
     files = {"file": ("dup_apaar.csv", csv_data.encode("utf-8"), "text/csv")}
     resp = await client.post("/api/intake/upload", files=files)
@@ -196,14 +235,17 @@ Student Two,{shared_apaar},2007-02-02,Male,General,State Merit Quota,{enr2},2025
 
 
 @pytest.mark.asyncio
-async def test_rule_semantics_pending_is_low_severity_and_not_discrepancy(client):
+async def test_rule_semantics_pending_is_low_severity_and_not_discrepancy(client, create_isolated_programme):
     """Scenario 5: PENDING APAAR status emits R02_APAAR_PENDING_ACKNOWLEDGEMENT with LOW severity."""
     unique_suffix = uuid.uuid4().hex[:6].upper()
+    prog_name = f"B.Tech CSE SemPending {unique_suffix}"
+    await create_isolated_programme(prog_name, sanctioned_intake=50)
+
     test_enr = f"ENR-SEM-PEND-{unique_suffix}"
     test_apaar = f"DEMO-APAAR-2026-PND{unique_suffix[:3]}3"
 
     csv_data = f"""student_name,apaar_id,dob,gender,category,quota,enrolment_number,admission_date,programme_name
-Pooja Semantics,{test_apaar},2007-02-15,Female,General,State Merit Quota,{test_enr},2025-08-16,B.Tech Computer Science and Engineering
+Pooja Semantics,{test_apaar},2007-02-15,Female,General,State Merit Quota,{test_enr},2025-08-16,{prog_name}
 """
     files = {"file": ("pending.csv", csv_data.encode("utf-8"), "text/csv")}
     resp = await client.post("/api/intake/upload", files=files)
@@ -219,13 +261,16 @@ Pooja Semantics,{test_apaar},2007-02-15,Female,General,State Merit Quota,{test_e
 
 
 @pytest.mark.asyncio
-async def test_rule_semantics_missing_apaar_emits_unavailable(client):
+async def test_rule_semantics_missing_apaar_emits_unavailable(client, create_isolated_programme):
     """Scenario 6: Empty/Missing APAAR status emits R02_APAAR_UNAVAILABLE_IN_ROSTER with LOW severity."""
     unique_suffix = uuid.uuid4().hex[:6].upper()
+    prog_name = f"B.Tech CSE SemMissing {unique_suffix}"
+    await create_isolated_programme(prog_name, sanctioned_intake=50)
+
     test_enr = f"ENR-SEM-NOAP-{unique_suffix}"
 
     csv_data = f"""student_name,apaar_id,dob,gender,category,quota,enrolment_number,admission_date,programme_name
-Roster Candidate,,2007-03-10,Female,General,State Merit Quota,{test_enr},2025-08-16,B.Tech Computer Science and Engineering
+Roster Candidate,,2007-03-10,Female,General,State Merit Quota,{test_enr},2025-08-16,{prog_name}
 """
     files = {"file": ("missing_apaar.csv", csv_data.encode("utf-8"), "text/csv")}
     resp = await client.post("/api/intake/upload", files=files)
@@ -241,14 +286,17 @@ Roster Candidate,,2007-03-10,Female,General,State Merit Quota,{test_enr},2025-08
 
 
 @pytest.mark.asyncio
-async def test_rule_semantics_mismatch_emits_name_discrepancy(client):
+async def test_rule_semantics_mismatch_emits_name_discrepancy(client, create_isolated_programme):
     """Scenario 7: APAAR ending with 9 emits R02_APAAR_NAME_DISCREPANCY with MEDIUM severity."""
     unique_suffix = uuid.uuid4().hex[:6].upper()
+    prog_name = f"B.Tech CSE SemMismatch {unique_suffix}"
+    await create_isolated_programme(prog_name, sanctioned_intake=50)
+
     test_enr = f"ENR-SEM-MIS-{unique_suffix}"
     test_apaar = f"DEMO-APAAR-2026-MSM{unique_suffix[:3]}9"
 
     csv_data = f"""student_name,apaar_id,dob,gender,category,quota,enrolment_number,admission_date,programme_name
-Aarav Verma,{test_apaar},2006-08-30,Male,EWS,Management Quota,{test_enr},2025-08-16,B.Tech Computer Science and Engineering
+Aarav Verma,{test_apaar},2006-08-30,Male,EWS,Management Quota,{test_enr},2025-08-16,{prog_name}
 """
     files = {"file": ("mismatch.csv", csv_data.encode("utf-8"), "text/csv")}
     resp = await client.post("/api/intake/upload", files=files)
