@@ -1,5 +1,6 @@
 """Configuration module for VidyaSetu using Pydantic Settings."""
-from typing import List, Union
+import os
+from typing import List, Union, Any
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -48,6 +49,17 @@ class Settings(BaseSettings):
         extra="ignore",
         case_sensitive=True,
     )
+
+    @field_validator("BACKEND_PORT", mode="before")
+    @classmethod
+    def resolve_backend_port(cls, v: Any) -> int:
+        port_env = os.environ.get("PORT")
+        if port_env:
+            try:
+                return int(port_env)
+            except ValueError:
+                pass
+        return int(v) if v is not None else 8000
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

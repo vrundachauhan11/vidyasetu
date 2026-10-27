@@ -3,13 +3,15 @@ Product Positioning: An explainable, privacy-aware enrolment integrity and regul
 """
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from fastapi import FastAPI, status
+import os
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.logging_config import setup_logging, logger
-from app.database import AsyncSessionLocal, check_db_connection
+from app.database import AsyncSessionLocal, check_db_connection, engine, Base
 from app.core.errors import (
     VidyaSetuException,
     vidyasetu_exception_handler,
@@ -37,14 +39,16 @@ setup_logging(settings.LOG_LEVEL)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifecycle hooks: seed synthetic demo data on launch."""
+    """Application lifecycle hooks: initialize schema and seed synthetic demo data on launch."""
     logger.info("Initializing VidyaSetu Regulatory Intelligence Platform...")
     try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
         async with AsyncSessionLocal() as session:
             await seed_demo_data_if_empty(session)
             await deduplicate_existing_signals(session)
     except Exception as exc:
-        logger.warning(f"Initial DB seed / deduplication check skipped or deferred: {exc}")
+        logger.warning(f"Initial DB schema / seed / deduplication check skipped or deferred: {exc}")
     yield
     logger.info("Shutting down VidyaSetu API gracefully.")
 
@@ -125,3 +129,29 @@ app.include_router(credentials_router, prefix=api_prefix)
 app.include_router(consent_router, prefix=api_prefix)
 app.include_router(audit_router, prefix=api_prefix)
 app.include_router(reports_router, prefix=api_prefix)
+
+# Mount frontend production build if available (supports single-host deployment)
+frontend_dist = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist"))
+if not os.path.exists(frontend_dist):
+    frontend_dist = os.path.abspath("frontend/dist")
+
+if os.path.exists(frontend_dist):
+    assets_dir = os.path.join(frontend_dist, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa_frontend(full_path: str):
+        # Do not intercept API requests
+        if full_path.startswith("api"):
+            raise HTTPException(status_code=404, detail="API endpoint not found")
+        # Security: block access to sensitive extensions
+        blocked = (".db", ".sqlite", ".sqlite3", ".env", ".bak", ".py", ".log", ".sh")
+        if any(full_path.lower().endswith(ext) for ext in blocked):
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        file_path = os.path.join(frontend_dist, full_path)
+        if full_path and os.path.exists(file_path) and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(frontend_dist, "index.html"))
+

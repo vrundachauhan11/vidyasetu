@@ -101,7 +101,17 @@ async def seed_demo_data_if_empty(session: AsyncSession) -> bool:
         approved_quota_details="State Merit 85% (51), All India Quota 15% (9)",
         created_at=now,
     )
-    session.add_all([prog1, prog2, prog3])
+    prog4 = ProgrammeApproval(
+        id=str(uuid.uuid4()),
+        institution_id=inst1.id,
+        programme_name="B.Tech Artificial Intelligence & Data Science",
+        degree_level="Undergraduate",
+        academic_year="2025-26",
+        sanctioned_intake=60,
+        approved_quota_details="State Quota 100% (60 seats)",
+        created_at=now,
+    )
+    session.add_all([prog1, prog2, prog3, prog4])
     await session.flush()
 
     # 3. Intake Batches
@@ -134,7 +144,7 @@ async def seed_demo_data_if_empty(session: AsyncSession) -> bool:
 
     # 4. Synthetic Student Enrolments
     students_data = [
-        # Normal verified student
+        # 1. Normal verified student
         {
             "name": "Ananya Sharma [DEMO]",
             "apaar_id": "DEMO-APAAR-2026-904128",
@@ -148,7 +158,7 @@ async def seed_demo_data_if_empty(session: AsyncSession) -> bool:
             "prog_id": prog1.id,
             "inst_id": inst1.id,
         },
-        # Normal verified student
+        # 2. Normal verified student
         {
             "name": "Rohan Patel [DEMO]",
             "apaar_id": "DEMO-APAAR-2026-904129",
@@ -162,7 +172,7 @@ async def seed_demo_data_if_empty(session: AsyncSession) -> bool:
             "prog_id": prog1.id,
             "inst_id": inst1.id,
         },
-        # Pending APAAR student (normal verification delay, NOT fraud)
+        # 3. Pending APAAR student (normal operational verification delay, NOT fraud)
         {
             "name": "Pooja V. Nair [DEMO]",
             "apaar_id": "DEMO-APAAR-2026-904130",
@@ -176,7 +186,7 @@ async def seed_demo_data_if_empty(session: AsyncSession) -> bool:
             "prog_id": prog1.id,
             "inst_id": inst1.id,
         },
-        # Student with APAAR Identity Mismatch (Name spelling discrepancy)
+        # 4. Student with APAAR Identity Mismatch (Name spelling discrepancy)
         {
             "name": "Aarav S. Verma [DEMO]",
             "apaar_id": "DEMO-APAAR-2026-904131",
@@ -190,7 +200,77 @@ async def seed_demo_data_if_empty(session: AsyncSession) -> bool:
             "prog_id": prog1.id,
             "inst_id": inst1.id,
         },
-        # Student over sanctioned intake limit
+        # 5. Verified batch intake student
+        {
+            "name": "Kavya Krishnan [DEMO]",
+            "apaar_id": "DEMO-APAAR-2026-904140",
+            "apaar_status": "VERIFIED",
+            "dob": "2007-03-10",
+            "gender": "Female",
+            "category": "General",
+            "quota": "State Merit Quota",
+            "enrolment_number": "ENR-2025-CSE-005",
+            "integrity_status": "CLEARED",
+            "prog_id": prog1.id,
+            "inst_id": inst1.id,
+        },
+        # 6. Verified batch intake student
+        {
+            "name": "Devansh Singhania [DEMO]",
+            "apaar_id": "DEMO-APAAR-2026-904141",
+            "apaar_status": "VERIFIED",
+            "dob": "2006-12-04",
+            "gender": "Male",
+            "category": "General",
+            "quota": "Management Quota",
+            "enrolment_number": "ENR-2025-CSE-006",
+            "integrity_status": "CLEARED",
+            "prog_id": prog1.id,
+            "inst_id": inst1.id,
+        },
+        # 7. Verified batch intake student
+        {
+            "name": "Meera Joshi [DEMO]",
+            "apaar_id": "DEMO-APAAR-2026-904142",
+            "apaar_status": "VERIFIED",
+            "dob": "2007-07-22",
+            "gender": "Female",
+            "category": "OBC-NCL",
+            "quota": "State Merit Quota",
+            "enrolment_number": "ENR-2025-CSE-007",
+            "integrity_status": "CLEARED",
+            "prog_id": prog1.id,
+            "inst_id": inst1.id,
+        },
+        # 8. Student with Resolved Reviewer Decision
+        {
+            "name": "Tarun Balakrishnan [DEMO]",
+            "apaar_id": "DEMO-APAAR-2026-904143",
+            "apaar_status": "PENDING_VERIFICATION",
+            "dob": "2006-05-18",
+            "gender": "Male",
+            "category": "SC",
+            "quota": "State Merit Quota",
+            "enrolment_number": "ENR-2025-CSE-008",
+            "integrity_status": "RESOLVED",
+            "prog_id": prog1.id,
+            "inst_id": inst1.id,
+        },
+        # 9. Verified batch intake student
+        {
+            "name": "Simran Kaur [DEMO]",
+            "apaar_id": "DEMO-APAAR-2026-904144",
+            "apaar_status": "VERIFIED",
+            "dob": "2007-09-01",
+            "gender": "Female",
+            "category": "EWS",
+            "quota": "State Merit Quota",
+            "enrolment_number": "ENR-2025-CSE-009",
+            "integrity_status": "CLEARED",
+            "prog_id": prog1.id,
+            "inst_id": inst1.id,
+        },
+        # 10. Student over sanctioned intake limit
         {
             "name": "Siddharth Rao [DEMO]",
             "apaar_id": "DEMO-APAAR-2026-904132",
@@ -202,6 +282,48 @@ async def seed_demo_data_if_empty(session: AsyncSession) -> bool:
             "enrolment_number": "ENR-2025-CSE-121",
             "integrity_status": "FLAGGED_FOR_REVIEW",
             "prog_id": prog1.id,
+            "inst_id": inst1.id,
+        },
+        # 11. Missing APAAR in Roster
+        {
+            "name": "Farida Begum [DEMO]",
+            "apaar_id": "",
+            "apaar_status": "UNAVAILABLE",
+            "dob": "2007-05-18",
+            "gender": "Female",
+            "category": "General",
+            "quota": "Management Quota",
+            "enrolment_number": "REG-UNAV-74C474-03",
+            "integrity_status": "FLAGGED_FOR_REVIEW",
+            "prog_id": prog2.id,
+            "inst_id": inst1.id,
+        },
+        # 12. Duplicate Enrolment Pair - Record 1 (Cleared entry)
+        {
+            "name": "Gaurav Sen [DEMO]",
+            "apaar_id": "DEMO-APAAR-2026-DP174C0",
+            "apaar_status": "VERIFIED",
+            "dob": "2007-01-10",
+            "gender": "Male",
+            "category": "General",
+            "quota": "State Merit Quota",
+            "enrolment_number": "REG-DUP-74C474-05",
+            "integrity_status": "CLEARED",
+            "prog_id": prog2.id,
+            "inst_id": inst1.id,
+        },
+        # 13. Duplicate Enrolment Pair - Record 2 (Flagged concurrent entry)
+        {
+            "name": "Gaurav Sen (Duplicate Entry) [DEMO]",
+            "apaar_id": "DEMO-APAAR-2026-DP274C0",
+            "apaar_status": "VERIFIED",
+            "dob": "2007-01-10",
+            "gender": "Male",
+            "category": "General",
+            "quota": "State Merit Quota",
+            "enrolment_number": "REG-DUP-74C474-05-DUP6",
+            "integrity_status": "FLAGGED_FOR_REVIEW",
+            "prog_id": prog2.id,
             "inst_id": inst1.id,
         },
     ]
@@ -231,7 +353,7 @@ async def seed_demo_data_if_empty(session: AsyncSession) -> bool:
     await session.flush()
 
     # 5. Integrity Signals with Explainable Deterministic Findings
-    # Signal 1: Pending APAAR verification
+    # Signal 1: Pending APAAR verification (Pooja V. Nair, index 2)
     sig1 = IntegritySignal(
         id=str(uuid.uuid4()),
         student_id=created_students[2].id,
@@ -242,7 +364,7 @@ async def seed_demo_data_if_empty(session: AsyncSession) -> bool:
         review_status="PENDING",
         created_at=now,
     )
-    # Signal 2: APAAR Name Discrepancy
+    # Signal 2: APAAR Name Discrepancy (Aarav S. Verma, index 3)
     sig2 = IntegritySignal(
         id=str(uuid.uuid4()),
         student_id=created_students[3].id,
@@ -253,10 +375,10 @@ async def seed_demo_data_if_empty(session: AsyncSession) -> bool:
         review_status="PENDING",
         created_at=now,
     )
-    # Signal 3: Sanctioned Intake Overrun
+    # Signal 3: Sanctioned Intake Overrun (Siddharth Rao, index 9)
     sig3 = IntegritySignal(
         id=str(uuid.uuid4()),
-        student_id=created_students[4].id,
+        student_id=created_students[9].id,
         rule_code="R01_SANCTIONED_INTAKE_EXCEEDED",
         severity="HIGH",
         finding_summary="Enrolment exceeds AICTE approved intake capacity of 120 seats",
@@ -264,7 +386,57 @@ async def seed_demo_data_if_empty(session: AsyncSession) -> bool:
         review_status="PENDING",
         created_at=now,
     )
-    session.add_all([sig1, sig2, sig3])
+    # Signal 4: Tarun Balakrishnan Resolved Signal 1 (index 7)
+    sig4 = IntegritySignal(
+        id=str(uuid.uuid4()),
+        student_id=created_students[7].id,
+        rule_code="R02_APAAR_MOCK_DISCREPANCY",
+        severity="MEDIUM",
+        finding_summary="Mock identity discrepancy resolved against verified council roster",
+        explanation="Reviewer confirmed admission ledger and identity proof matches institutional physical records.",
+        review_status="RESOLVED_ACCEPTED",
+        reviewer_decision="RESOLVED_ACCEPTED",
+        reviewer_notes="Runtime verification test decision: verified against council roster",
+        reviewed_at=now,
+        created_at=now,
+    )
+    # Signal 5: Tarun Balakrishnan Resolved Signal 2 (index 7)
+    sig5 = IntegritySignal(
+        id=str(uuid.uuid4()),
+        student_id=created_students[7].id,
+        rule_code="R02_APAAR_PENDING_ACKNOWLEDGEMENT",
+        severity="MEDIUM",
+        finding_summary="APAAR verification delayed in mock adapter",
+        explanation="Pending status acknowledged. No adverse conclusion drawn.",
+        review_status="RESOLVED_ACCEPTED",
+        reviewer_decision="RESOLVED_ACCEPTED",
+        reviewer_notes="Synthetic demo review: APAAR status is pending in the simulated adapter. No adverse conclusion is drawn. Await acknowledgement and recheck status",
+        reviewed_at=now,
+        created_at=now,
+    )
+    # Signal 6: Farida Begum Missing APAAR (index 10)
+    sig6 = IntegritySignal(
+        id=str(uuid.uuid4()),
+        student_id=created_students[10].id,
+        rule_code="R02_APAAR_UNAVAILABLE_IN_ROSTER",
+        severity="LOW",
+        finding_summary="APAAR ID Unavailable in Submitted Institutional Roster",
+        explanation="No APAAR identifier provided in the intake batch. Mandatory DigiLocker onboarding required within 60 days.",
+        review_status="PENDING",
+        created_at=now,
+    )
+    # Signal 7: Gaurav Sen Concurrent Duplicate Enrolment (index 12)
+    sig7 = IntegritySignal(
+        id=str(uuid.uuid4()),
+        student_id=created_students[12].id,
+        rule_code="R03_DUPLICATE_CONCURRENT_ENROLMENT",
+        severity="HIGH",
+        finding_summary="Duplicate enrolment number detected within same institution roster",
+        explanation="Enrolment number REG-DUP-74C474-05 was submitted for two distinct entries. Immediate verification required.",
+        review_status="PENDING",
+        created_at=now,
+    )
+    session.add_all([sig1, sig2, sig3, sig4, sig5, sig6, sig7])
     await session.flush()
 
     # 6. Audit Logs
@@ -273,6 +445,8 @@ async def seed_demo_data_if_empty(session: AsyncSession) -> bool:
         ("system_rule_engine@vidyasetu.local", "SYSTEM", "APAAR_MOCK_VALIDATION", "apaar_adapter/DEMO-BATCH-2025-08-01", {"verified": 119, "pending": 1, "mismatched": 1}),
         ("system_rule_engine@vidyasetu.local", "SYSTEM", "INTEGRITY_RULES_EVALUATION", "rule_registry/Apex_CSE", {"rules_evaluated": 8, "signals_generated": 3}),
         ("compliance_officer@aicte-gov.in", "COMPLIANCE_REVIEWER", "FLAG_TRIAGE_OPENED", "integrity_signals/R01_SANCTIONED_INTAKE_EXCEEDED", {"status": "Review in progress"}),
+        ("reviewer.desk@vidyasetu.local", "COMPLIANCE_REVIEWER", "SIGNAL_REVIEW_DECISION", f"integrity_signals/{sig4.id}", {"decision": "RESOLVED_ACCEPTED", "notes": "Runtime verification test decision: verified against council roster"}),
+        ("reviewer.desk@vidyasetu.local", "COMPLIANCE_REVIEWER", "SIGNAL_REVIEW_DECISION", f"integrity_signals/{sig5.id}", {"decision": "RESOLVED_ACCEPTED", "notes": "Synthetic demo review: APAAR status is pending in the simulated adapter. No adverse conclusion is drawn. Await acknowledgement and recheck status"}),
     ]
 
     for actor, role, action, resource, details in audit_entries:
