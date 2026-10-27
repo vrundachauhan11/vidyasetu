@@ -326,3 +326,104 @@ async def test_rule_registry_statutory_transparency(client):
         # Ensure unverified parameters are flagged with DEMO CONFIGURATION
         if r["reference_status"] == "DEMO_REFERENCE" or "DEMO" in r["regulatory_reference"]:
             assert "DEMO" in r["regulatory_reference"] or "DEMO" in r["description"]
+
+
+@pytest.mark.asyncio
+async def test_phase2_intake_integrity_pipeline_end_to_end(client, create_isolated_programme):
+    """Phase 2: Comprehensive verification of intake integrity pipeline detecting seeded anomalies."""
+    suffix = uuid.uuid4().hex[:6].upper()
+    prog_name = f"B.Tech ECE Phase2 {suffix}"
+    await create_isolated_programme(prog_name, sanctioned_intake=50)
+
+    legit_enr = f"ENR-LEGIT-{suffix}"
+    pending_enr = f"ENR-PEND-{suffix}"
+    mismatch_enr = f"ENR-MIS-{suffix}"
+    dupenr_val = f"ENR-DUP-{suffix}"
+    dupapaar_val = f"DEMO-APAAR-2026-SHR{suffix[:3]}0"
+    dupa_enr1 = f"ENR-SHR1-{suffix}"
+    dupa_enr2 = f"ENR-SHR2-{suffix}"
+
+    synthetic_csv = f"""student_name,apaar_id,dob,gender,category,quota,enrolment_number,admission_date,programme_name
+Kavya Krishnan,DEMO-APAAR-2026-LEG{suffix[:3]}0,2007-03-10,Female,General,State Merit Quota,{legit_enr},2025-08-16,{prog_name}
+Pooja Pending,DEMO-APAAR-2026-PND{suffix[:3]}3,2007-02-15,Female,General,State Merit Quota,{pending_enr},2025-08-16,{prog_name}
+Aarav Mismatch,DEMO-APAAR-2026-MSM{suffix[:3]}9,2006-08-30,Male,EWS,Management Quota,{mismatch_enr},2025-08-16,{prog_name}
+First DupEnr,DEMO-APAAR-2026-D1{suffix[:3]}0,2007-01-01,Female,General,State Merit Quota,{dupenr_val},2025-08-16,{prog_name}
+Second DupEnr,DEMO-APAAR-2026-D2{suffix[:3]}0,2007-01-02,Male,General,State Merit Quota,{dupenr_val},2025-08-16,{prog_name}
+Student DupA1,{dupapaar_val},2007-05-01,Female,General,State Merit Quota,{dupa_enr1},2025-08-16,{prog_name}
+Student DupA2,{dupapaar_val},2007-05-02,Male,General,State Merit Quota,{dupa_enr2},2025-08-16,{prog_name}
+"""
+    files = {"file": ("synthetic_phase2_intake.csv", synthetic_csv.encode("utf-8"), "text/csv")}
+    upload_resp = await client.post("/api/intake/upload", files=files)
+    assert upload_resp.status_code == 200
+    data = upload_resp.json()
+    assert data["summary"]["total_records"] == 7
+    assert data["summary"]["flagged_records"] >= 4
+
+    # 1. Legitimate student is CLEARED (0 signals)
+    legit_resp = await client.get(f"/api/students?search={legit_enr}")
+    legit_st = next(s for s in legit_resp.json()["data"] if s["enrolment_number"] == legit_enr)
+    assert legit_st["integrity_status"] == "CLEARED"
+    assert legit_st["apaar_status"] == "VERIFIED"
+    assert len(legit_st["signals"]) == 0
+
+    # 2. Pending APAAR student emits R02_APAAR_PENDING_ACKNOWLEDGEMENT with LOW severity (non-punitive)
+    pend_resp = await client.get(f"/api/students?search={pending_enr}")
+    pend_st = next(s for s in pend_resp.json()["data"] if s["enrolment_number"] == pending_enr)
+    assert pend_st["integrity_status"] == "FLAGGED_FOR_REVIEW"
+    assert pend_st["apaar_status"] == "PENDING_VERIFICATION"
+    pend_sig = pend_st["signals"][0]
+    assert pend_sig["rule_code"] == "R02_APAAR_PENDING_ACKNOWLEDGEMENT"
+    assert pend_sig["severity"] == "LOW"
+    assert "fraud" not in pend_sig["finding_summary"].lower()
+
+    # 3. Name Discrepancy student emits R02_APAAR_NAME_DISCREPANCY with MEDIUM severity
+    mis_resp = await client.get(f"/api/students?search={mismatch_enr}")
+    mis_st = next(s for s in mis_resp.json()["data"] if s["enrolment_number"] == mismatch_enr)
+    assert mis_st["integrity_status"] == "FLAGGED_FOR_REVIEW"
+    assert mis_st["apaar_status"] == "MISMATCH"
+    assert any(sig["rule_code"] == "R02_APAAR_NAME_DISCREPANCY" for sig in mis_st["signals"])
+
+    # 4. Duplicate Enrolment Number detected with R03 (HIGH)
+    dupenr_resp = await client.get(f"/api/students?search={dupenr_val}")
+    dup_flagged = [s for s in dupenr_resp.json()["data"] if any(sig["rule_code"] == "R03_DUPLICATE_CONCURRENT_ENROLMENT" for sig in s["signals"])]
+    assert len(dup_flagged) >= 1
+
+    # 5. Duplicate Synthetic APAAR detected with R03 (HIGH)
+    dupa2_resp = await client.get(f"/api/students?search={dupa_enr2}")
+    dupa2_st = next(s for s in dupa2_resp.json()["data"] if s["enrolment_number"] == dupa_enr2)
+    assert any(sig["rule_code"] == "R03_DUPLICATE_CONCURRENT_ENROLMENT" for sig in dupa2_st["signals"])
+
+    # 6. Compliance Reviewer Adjudication Workflow
+    target_signal_id = pend_sig["id"]
+    adjudication_payload = {
+        "decision": "RESOLVED_ACCEPTED",
+        "reviewer_notes": "Accepted institutional justification: Verified physical student identity card and admission slip.",
+        "reviewer_role": "COMPLIANCE_REVIEWER",
+        "reviewer_email": "reviewer@aicte-audit.gov.in",
+    }
+    adj_resp = await client.post(f"/api/review/{target_signal_id}/decision", json=adjudication_payload)
+    assert adj_resp.status_code == 200
+
+    # 7. Decision Persists in Student Records
+    pend_st_after = (await client.get(f"/api/students?search={pending_enr}")).json()["data"][0]
+    assert pend_st_after["integrity_status"] == "RESOLVED"
+    assert pend_st_after["signals"][0]["review_status"] == "RESOLVED_ACCEPTED"
+    assert "Verified physical student identity card" in pend_st_after["signals"][0]["reviewer_notes"]
+
+    # 8. Audit Trail Verification
+    audit_resp = await client.get("/api/audit/logs")
+    assert audit_resp.status_code == 200
+    audit_entries = audit_resp.json()["data"]
+    decision_logs = [l for l in audit_entries if l["action"] == "SIGNAL_REVIEW_DECISION"]
+    assert len(decision_logs) >= 1
+    assert decision_logs[0]["tamper_hash"] is not None and len(decision_logs[0]["tamper_hash"]) == 64
+
+    # 9. Idempotent Repeated Upload
+    reupload_files = {"file": ("synthetic_phase2_intake_reupload.csv", synthetic_csv.encode("utf-8"), "text/csv")}
+    reupload_resp = await client.post("/api/intake/upload", files=reupload_files)
+    assert reupload_resp.status_code == 200
+    pend_st_reupload = (await client.get(f"/api/students?search={pending_enr}")).json()["data"][0]
+    assert pend_st_reupload["integrity_status"] == "RESOLVED"
+    assert len(pend_st_reupload["signals"]) == 1
+    assert pend_st_reupload["version"] >= 2
+

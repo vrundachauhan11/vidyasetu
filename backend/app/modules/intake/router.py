@@ -3,7 +3,7 @@ import csv
 import io
 import uuid
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -15,6 +15,111 @@ from app.modules.auth.security import UserProfile, require_roles
 
 router = APIRouter(prefix="/intake", tags=["Data Intake & Validation"])
 
+CANONICAL_COLUMNS: list[str] = [
+    "student_name",
+    "apaar_id",
+    "dob",
+    "gender",
+    "category",
+    "quota",
+    "enrolment_number",
+    "admission_date",
+    "programme_name",
+]
+
+HEADER_ALIASES: dict[str, str] = {
+    # student_name
+    "student_name": "student_name",
+    "studentname": "student_name",
+    "student": "student_name",
+    "name": "student_name",
+    "candidate_name": "student_name",
+    "candidatename": "student_name",
+    "full_name": "student_name",
+    "fullname": "student_name",
+    # apaar_id
+    "apaar_id": "apaar_id",
+    "apaarid": "apaar_id",
+    "apaar": "apaar_id",
+    "apaar_number": "apaar_id",
+    "apaarnumber": "apaar_id",
+    "abc_id": "apaar_id",
+    "abcid": "apaar_id",
+    # dob
+    "dob": "dob",
+    "date_of_birth": "dob",
+    "dateofbirth": "dob",
+    "birth_date": "dob",
+    "birthdate": "dob",
+    # gender
+    "gender": "gender",
+    "sex": "gender",
+    # category
+    "category": "category",
+    "social_category": "category",
+    "socialcategory": "category",
+    "caste_category": "category",
+    "caste": "category",
+    # quota
+    "quota": "quota",
+    "admission_quota": "quota",
+    "admissionquota": "quota",
+    "seat_quota": "quota",
+    "seatquota": "quota",
+    # enrolment_number
+    "enrolment_number": "enrolment_number",
+    "enrolmentnumber": "enrolment_number",
+    "enrolment_no": "enrolment_number",
+    "enrolmentno": "enrolment_number",
+    "enrollment_number": "enrolment_number",
+    "enrollmentnumber": "enrolment_number",
+    "enrollment_no": "enrolment_number",
+    "enrollmentno": "enrolment_number",
+    "registration_number": "enrolment_number",
+    "registrationnumber": "enrolment_number",
+    "registration_no": "enrolment_number",
+    "reg_number": "enrolment_number",
+    "reg_no": "enrolment_number",
+    "regno": "enrolment_number",
+    "roll_number": "enrolment_number",
+    "roll_no": "enrolment_number",
+    "rollno": "enrolment_number",
+    # admission_date
+    "admission_date": "admission_date",
+    "admissiondate": "admission_date",
+    "date_of_admission": "admission_date",
+    "dateofadmission": "admission_date",
+    "doa": "admission_date",
+    # programme_name
+    "programme_name": "programme_name",
+    "programmename": "programme_name",
+    "programme": "programme_name",
+    "program_name": "programme_name",
+    "programname": "programme_name",
+    "program": "programme_name",
+    "branch": "programme_name",
+    "course": "programme_name",
+    "stream": "programme_name",
+    "degree": "programme_name",
+    # optional: academic_year
+    "academic_year": "academic_year",
+    "academicyear": "academic_year",
+    "ay": "academic_year",
+    "session": "academic_year",
+}
+
+
+def normalize_header(raw_header: str) -> str:
+    """Normalize a raw header string by stripping BOM, trimming whitespace, lowercasing, and normalizing punctuation."""
+    if not raw_header:
+        return ""
+    cleaned = raw_header.lstrip("\ufeff").strip()
+    normalized = cleaned.lower().replace("-", "_").replace(" ", "_")
+    while "__" in normalized:
+        normalized = normalized.replace("__", "_")
+    return HEADER_ALIASES.get(normalized, normalized)
+
+
 SAMPLE_CSV_CONTENT = """student_name,apaar_id,dob,gender,category,quota,enrolment_number,admission_date,programme_name
 Kavya Krishnan,DEMO-APAAR-2026-904140,2007-03-10,Female,General,State Merit Quota,ENR-2025-CSE-005,2025-08-16,B.Tech Computer Science and Engineering
 Devansh Singhania,DEMO-APAAR-2026-904141,2006-12-04,Male,General,Management Quota,ENR-2025-CSE-006,2025-08-16,B.Tech Computer Science and Engineering
@@ -24,10 +129,14 @@ Simran Kaur,DEMO-APAAR-2026-904144,2007-09-01,Female,EWS,State Merit Quota,ENR-2
 """
 
 
-@router.get("/sample-csv", response_class=PlainTextResponse)
+@router.get("/sample-csv")
 async def get_sample_csv():
-    """Download a valid synthetic demo CSV template."""
-    return SAMPLE_CSV_CONTENT
+    """Download the canonical synthetic demo CSV template."""
+    return Response(
+        content=SAMPLE_CSV_CONTENT,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="vidyasetu_intake_template.csv"'},
+    )
 
 
 @router.get("/batches")
@@ -78,33 +187,73 @@ async def upload_intake_csv(
     if not contents or len(contents.strip()) == 0:
         raise HTTPException(status_code=400, detail="Uploaded CSV file is empty.")
 
+    # 1. Safely decode input bytes handling UTF-8-BOM, UTF-8, and fallback encodings
+    if contents.startswith(b"\xef\xbb\xbf"):
+        contents = contents[3:]
+
     try:
         text = contents.decode("utf-8-sig")
     except UnicodeDecodeError:
         try:
-            text = contents.decode("latin-1")
-        except Exception:
-            raise HTTPException(status_code=400, detail="Malformed CSV input: unable to decode text.")
+            text = contents.decode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                text = contents.decode("latin-1")
+            except Exception:
+                raise HTTPException(status_code=400, detail="Malformed CSV input: unable to decode text.")
 
-    # Check for empty lines or malformed content
+    # Strip any residual BOM character
+    text = text.lstrip("\ufeff")
+
+    # 2. Parse CSV header
     string_io = io.StringIO(text)
     try:
-        reader = csv.DictReader(string_io)
+        csv_reader = csv.reader(string_io)
+        raw_headers = next(csv_reader, None)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Malformed CSV input: {str(exc)}")
 
-    required_fields = ["student_name", "apaar_id", "dob", "gender", "category", "quota", "enrolment_number"]
-    if not reader.fieldnames:
+    if not raw_headers or not any(h.strip() for h in raw_headers):
         raise HTTPException(status_code=422, detail="CSV file has no header row.")
 
-    missing_fields = [f for f in required_fields if f not in reader.fieldnames]
+    # 3. Normalize headers and map to canonical names
+    col_to_canonical: dict[int, str] = {}
+    col_to_original: dict[int, str] = {}
+    normalized_headers_set: set[str] = set()
+
+    for idx, raw_h in enumerate(raw_headers):
+        cleaned_raw = raw_h.lstrip("\ufeff").strip()
+        canon = normalize_header(raw_h)
+        if canon:
+            col_to_canonical[idx] = canon
+            normalized_headers_set.add(canon)
+        col_to_original[idx] = cleaned_raw
+
+    # 4. Check for genuinely missing canonical required columns
+    missing_fields = [col for col in CANONICAL_COLUMNS if col not in normalized_headers_set]
     if missing_fields:
         raise HTTPException(
             status_code=422,
             detail=f"CSV schema mismatch. Missing required column(s): {', '.join(missing_fields)}",
         )
 
-    rows = list(reader)
+    # 5. Parse data rows safely without discarding optional columns
+    rows: list[dict[str, str]] = []
+    for raw_row in csv_reader:
+        # Skip completely empty lines
+        if not raw_row or not any(field.strip() for field in raw_row):
+            continue
+        row_dict: dict[str, str] = {}
+        for idx, val in enumerate(raw_row):
+            val_clean = val.strip() if isinstance(val, str) else str(val)
+            canon_key = col_to_canonical.get(idx)
+            if canon_key:
+                row_dict[canon_key] = val_clean
+            orig_key = col_to_original.get(idx, f"col_{idx}")
+            if orig_key and orig_key not in row_dict:
+                row_dict[orig_key] = val_clean
+        rows.append(row_dict)
+
     if len(rows) == 0:
         raise HTTPException(status_code=422, detail="CSV contains headers but no data rows.")
 

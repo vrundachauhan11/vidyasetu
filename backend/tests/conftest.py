@@ -1,15 +1,21 @@
 """Pytest fixtures for VidyaSetu backend test suite."""
 import os
 import sys
-import pytest
-import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
+
+# Ensure test database isolation BEFORE importing app or database modules
+TEST_DB_FILE = "./vidyasetu_test.db"
+os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{TEST_DB_FILE}"
+os.environ["SYNC_DATABASE_URL"] = f"sqlite:///{TEST_DB_FILE}"
 
 # Ensure backend root is on Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import pytest
+import pytest_asyncio
+from httpx import AsyncClient, ASGITransport
+
 from app.main import app
-from app.database import AsyncSessionLocal
+from app.database import engine, Base, AsyncSessionLocal
 from app.seed.demo_data import seed_demo_data_if_empty
 from app.modules.auth.security import create_access_token
 from app.models import ProgrammeApproval, Institution
@@ -19,9 +25,24 @@ from sqlalchemy import select
 
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def initialize_test_database():
-    """Ensure database has synthetic demo data for test assertions."""
+    """Ensure isolated test database has tables and synthetic demo data for test assertions."""
+    # 1. Initialize schema in isolated test DB
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    # 2. Seed initial canonical data
     async with AsyncSessionLocal() as session:
         await seed_demo_data_if_empty(session)
+
+    yield
+
+    # 3. Teardown test engine and cleanup test db file
+    await engine.dispose()
+    if os.path.exists(TEST_DB_FILE):
+        try:
+            os.remove(TEST_DB_FILE)
+        except Exception:
+            pass
 
 
 @pytest_asyncio.fixture

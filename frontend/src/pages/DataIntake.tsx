@@ -119,7 +119,7 @@ export const DataIntake: React.FC<DataIntakeProps> = ({ currentUser }) => {
               Upload Institutional Admissions CSV
             </h3>
             <p className="text-xs text-slate-500 mt-1 max-w-md">
-              CSV file must contain standard regulatory columns: <code className="bg-slate-100 px-1 py-0.5 rounded text-[11px] font-mono">student_name, apaar_id, dob, gender, category, quota, enrolment_number</code>.
+              CSV file must contain canonical regulatory columns: <code className="bg-slate-100 px-1 py-0.5 rounded text-[11px] font-mono">student_name, apaar_id, dob, gender, category, quota, enrolment_number, admission_date, programme_name</code>.
             </p>
           </div>
 
@@ -174,6 +174,7 @@ export const DataIntake: React.FC<DataIntakeProps> = ({ currentUser }) => {
           <div className="pt-3 border-t border-slate-100">
             <a
               href="/api/intake/sample-csv"
+              download="vidyasetu_intake_template.csv"
               target="_blank"
               rel="noreferrer"
               className="text-xs text-blue-600 hover:text-blue-800 font-semibold inline-flex items-center gap-1"

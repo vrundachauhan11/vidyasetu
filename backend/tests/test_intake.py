@@ -60,7 +60,7 @@ async def test_malformed_csv_input(client):
     assert "empty" in resp_empty.json().get("detail", "").lower()
 
     # 3c. Header only with no data rows
-    header_only = "student_name,apaar_id,dob,gender,category,quota,enrolment_number\n"
+    header_only = "student_name,apaar_id,dob,gender,category,quota,enrolment_number,admission_date,programme_name\n"
     files_hdr = {"file": ("header_only.csv", header_only.encode("utf-8"), "text/csv")}
     resp_hdr = await client.post("/api/intake/upload", files=files_hdr)
     assert resp_hdr.status_code == 422
@@ -167,3 +167,99 @@ Deepika Padukone,{unique_apaar},2007-04-12,Female,General,State Merit Quota,{uni
     assert audit_resp.status_code == 200
     actions = [l["action"] for l in audit_resp.json()["data"]]
     assert "BATCH_CSV_UPLOAD" in actions
+
+
+@pytest.mark.asyncio
+async def test_canonical_csv_schema_upload(client):
+    """7. Valid canonical CSV upload with exact 9 canonical headers."""
+    import uuid
+    suffix = uuid.uuid4().hex[:6].upper()
+    canonical_csv = f"""student_name,apaar_id,dob,gender,category,quota,enrolment_number,admission_date,programme_name
+Ananya Canonical,DEMO-APAAR-2026-904550,2007-02-14,Female,General,State Merit Quota,ENR-CANON-{suffix},2025-08-16,B.Tech Computer Science and Engineering
+"""
+    files = {"file": ("canonical_valid.csv", canonical_csv.encode("utf-8"), "text/csv")}
+    resp = await client.post("/api/intake/upload", files=files)
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body["success"] is True
+    assert body["summary"]["total_records"] == 1
+
+
+@pytest.mark.asyncio
+async def test_utf8_bom_and_whitespace_and_case_in_headers(client):
+    """8. Header parsing safely handles UTF-8 BOM, whitespace around headers, and case variations."""
+    import uuid
+    suffix = uuid.uuid4().hex[:6].upper()
+    # Headers have leading/trailing whitespace, mixed casing, and spaces
+    messy_header_csv = (
+        "  Student_Name  , apaar_id , DOB , Gender , Category , Quota , Enrolment_Number , Admission_Date , Programme_Name \n"
+        f"Karan Rawat,DEMO-APAAR-2026-904551,2007-03-20,Male,General,State Merit Quota,ENR-BOM-{suffix},2025-08-16,B.Tech Computer Science and Engineering\n"
+    )
+    # Encode with UTF-8 BOM prefix (\xef\xbb\xbf)
+    bom_bytes = b"\xef\xbb\xbf" + messy_header_csv.encode("utf-8")
+    files = {"file": ("bom_messy_headers.csv", bom_bytes, "text/csv")}
+    resp = await client.post("/api/intake/upload", files=files)
+    assert resp.status_code == 200, f"Expected 200 with BOM and whitespace, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body["success"] is True
+    assert body["summary"]["total_records"] == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_required_columns_reporting(client):
+    """9. Missing required columns produces 422 listing genuinely missing columns."""
+    # Omit category, quota, and programme_name
+    partial_csv = """student_name,apaar_id,dob,gender,enrolment_number,admission_date
+Sunil Gavaskar,DEMO-APAAR-2026-904552,2006-07-10,Male,ENR-MISS-999,2025-08-16
+"""
+    files = {"file": ("missing_fields.csv", partial_csv.encode("utf-8"), "text/csv")}
+    resp = await client.post("/api/intake/upload", files=files)
+    assert resp.status_code == 422
+    err_detail = resp.json().get("detail", "")
+    assert "CSV schema mismatch. Missing required column(s):" in err_detail
+    assert "category" in err_detail
+    assert "quota" in err_detail
+    assert "programme_name" in err_detail
+    # Ensure columns that WERE provided are NOT in the missing list
+    assert "student_name" not in err_detail.replace("Missing required column(s):", "")
+    assert "apaar_id" not in err_detail.replace("Missing required column(s):", "")
+    assert "dob" not in err_detail.replace("Missing required column(s):", "")
+    assert "gender" not in err_detail.replace("Missing required column(s):", "")
+    assert "enrolment_number" not in err_detail.replace("Missing required column(s):", "")
+    assert "admission_date" not in err_detail.replace("Missing required column(s):", "")
+
+
+@pytest.mark.asyncio
+async def test_template_headers_match_backend_expectations(client):
+    """10. Downloadable template headers match the backend canonical schema exactly."""
+    import csv
+    import io
+    from app.modules.intake.router import CANONICAL_COLUMNS
+
+    resp = await client.get("/api/intake/sample-csv")
+    assert resp.status_code == 200
+    assert "text/csv" in resp.headers.get("content-type", "")
+    assert 'attachment; filename="vidyasetu_intake_template.csv"' in resp.headers.get("content-disposition", "")
+
+    reader = csv.reader(io.StringIO(resp.text))
+    headers = next(reader)
+    clean_headers = [h.strip() for h in headers]
+    assert clean_headers == CANONICAL_COLUMNS, f"Template headers {clean_headers} != Canonical {CANONICAL_COLUMNS}"
+
+
+@pytest.mark.asyncio
+async def test_prebuilt_synthetic_csv_passes_validation(client):
+    """11. Pre-built synthetic CSV downloaded from template endpoint passes validation without schema error."""
+    resp_template = await client.get("/api/intake/sample-csv")
+    assert resp_template.status_code == 200
+    sample_csv_text = resp_template.text
+
+    files = {
+        "file": ("Synthetic_Institutional_Intake_Round2.csv", sample_csv_text.encode("utf-8"), "text/csv")
+    }
+    resp_upload = await client.post("/api/intake/upload", files=files)
+    assert resp_upload.status_code == 200, f"Expected 200 for prebuilt CSV, got {resp_upload.status_code}: {resp_upload.text}"
+    data = resp_upload.json()
+    assert data["success"] is True
+    assert data["summary"]["total_records"] == 5
+
