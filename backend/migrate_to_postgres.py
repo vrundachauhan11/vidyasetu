@@ -20,6 +20,10 @@ def migrate(sqlite_path: str, pg_url: str):
 
     # Synchronous URL for migration
     sync_pg_url = pg_url.replace("+asyncpg", "")
+    if sync_pg_url.startswith("postgres://"):
+        sync_pg_url = sync_pg_url.replace("postgres://", "postgresql+psycopg2://", 1)
+    elif sync_pg_url.startswith("postgresql://") and not sync_pg_url.startswith("postgresql+"):
+        sync_pg_url = sync_pg_url.replace("postgresql://", "postgresql+psycopg2://", 1)
     pg_engine = create_engine(sync_pg_url)
     
     # Connect to SQLite

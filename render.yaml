@@ -19,6 +19,16 @@ services:
       - key: AICTE_COUNCIL_REGISTRY_MOCK
         value: "True"
       - key: DATABASE_URL
-        value: sqlite+aiosqlite:///./vidyasetu.db
+        fromDatabase:
+          name: vidyasetu-db
+          property: connectionString
       - key: SYNC_DATABASE_URL
-        value: sqlite:///./vidyasetu.db
+        fromDatabase:
+          name: vidyasetu-db
+          property: connectionString
+
+databases:
+  - name: vidyasetu-db
+    databaseName: vidyasetu
+    user: vidyasetu_user
+    plan: free

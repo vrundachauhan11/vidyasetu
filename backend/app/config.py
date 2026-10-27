@@ -50,6 +50,30 @@ class Settings(BaseSettings):
         case_sensitive=True,
     )
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalize_database_url(cls, v: Any) -> str:
+        if not v or not isinstance(v, str):
+            return "sqlite+aiosqlite:///./vidyasetu.db"
+        val = v.strip()
+        if val.startswith("postgres://"):
+            return val.replace("postgres://", "postgresql+asyncpg://", 1)
+        if val.startswith("postgresql://") and not val.startswith("postgresql+"):
+            return val.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return val
+
+    @field_validator("SYNC_DATABASE_URL", mode="before")
+    @classmethod
+    def normalize_sync_database_url(cls, v: Any) -> str:
+        if not v or not isinstance(v, str):
+            return "sqlite:///./vidyasetu.db"
+        val = v.strip()
+        if val.startswith("postgres://"):
+            return val.replace("postgres://", "postgresql+psycopg2://", 1)
+        if val.startswith("postgresql://") and not val.startswith("postgresql+"):
+            return val.replace("postgresql://", "postgresql+psycopg2://", 1)
+        return val
+
     @field_validator("BACKEND_PORT", mode="before")
     @classmethod
     def resolve_backend_port(cls, v: Any) -> int:
