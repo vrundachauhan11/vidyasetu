@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
-from app.models import IntegritySignal, StudentEnrolment, AuditLog
+from app.models import IntegritySignal, StudentEnrolment, AuditLog, utc_now
 from app.seed.demo_data import generate_tamper_hash
 from app.modules.auth.security import UserProfile, require_roles
 
@@ -69,7 +69,7 @@ async def submit_review_decision(
     if not sig:
         raise HTTPException(status_code=404, detail="Integrity signal not found.")
 
-    now = datetime.now(timezone.utc)
+    now = utc_now()
     sig.review_status = payload.decision
     sig.reviewer_decision = payload.decision
     sig.reviewer_notes = payload.reviewer_notes

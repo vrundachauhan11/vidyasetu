@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from app.models import IntegritySignal, StudentEnrolment
+from app.models import IntegritySignal, StudentEnrolment, utc_now
 from app.logging_config import logger
 
 
@@ -22,7 +22,7 @@ async def deduplicate_existing_signals(session: AsyncSession) -> int:
         return 0
 
     deleted_count = 0
-    now = datetime.now(timezone.utc)
+    now = utc_now()
 
     for student_id, rule_code in duplicate_groups:
         sig_stmt = (

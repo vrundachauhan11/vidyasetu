@@ -8,7 +8,7 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.database import get_db
-from app.models import IntakeBatch, Institution, ProgrammeApproval, StudentEnrolment, IntegritySignal, AuditLog
+from app.models import IntakeBatch, Institution, ProgrammeApproval, StudentEnrolment, IntegritySignal, AuditLog, utc_now
 from app.seed.demo_data import generate_tamper_hash
 from app.logging_config import logger
 from app.modules.auth.security import UserProfile, require_roles
@@ -274,7 +274,7 @@ async def upload_intake_csv(
     all_progs = prog_res.scalars().all()
     default_prog = all_progs[0] if all_progs else None
 
-    now = datetime.now(timezone.utc)
+    now = utc_now()
     batch_ref = f"BATCH-{now.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
 
     valid_count = 0

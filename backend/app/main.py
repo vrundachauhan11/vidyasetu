@@ -4,14 +4,15 @@ Product Positioning: An explainable, privacy-aware enrolment integrity and regul
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import os
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.logging_config import setup_logging, logger
-from app.database import AsyncSessionLocal, check_db_connection, engine, Base
+from app.database import AsyncSessionLocal, check_db_connection, engine, Base, get_db
 from app.core.errors import (
     VidyaSetuException,
     vidyasetu_exception_handler,
@@ -44,11 +45,20 @@ async def lifespan(app: FastAPI):
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-        async with AsyncSessionLocal() as session:
-            await seed_demo_data_if_empty(session)
-            await deduplicate_existing_signals(session)
+        logger.info("Database schema verified / created successfully.")
     except Exception as exc:
-        logger.warning(f"Initial DB schema / seed / deduplication check skipped or deferred: {exc}")
+        logger.error(f"Error during schema creation: {exc}", exc_info=True)
+
+    try:
+        async with AsyncSessionLocal() as session:
+            seed_stats = await seed_demo_data_if_empty(session)
+            logger.info(f"Canonical demo data initialization result: {seed_stats}")
+            dedup_count = await deduplicate_existing_signals(session)
+            if dedup_count > 0:
+                logger.info(f"Signal deduplication completed: removed {dedup_count} redundant signals.")
+    except Exception as exc:
+        logger.error(f"Error during demo data initialization: {exc}", exc_info=True)
+
     yield
     logger.info("Shutting down VidyaSetu API gracefully.")
 
@@ -112,6 +122,53 @@ async def get_version():
         "problem_statement": "SIH 2026 Problem Statement 26263",
         "demo_mode": True,
         "disclaimer": "DEMO DATA ONLY - External integrations are simulated.",
+    }
+
+
+@app.post(f"{settings.API_V1_PREFIX}/system/seed-demo", tags=["System Management"])
+async def trigger_demo_seed(db: AsyncSession = Depends(get_db)):
+    """Safe, idempotent endpoint to ensure canonical demo records exist in database."""
+    try:
+        stats = await seed_demo_data_if_empty(db)
+        dedup_count = await deduplicate_existing_signals(db)
+        return {
+            "success": True,
+            "message": "Canonical demo seed verified and synchronized successfully.",
+            "stats": stats,
+            "deduplicated_signals": dedup_count,
+        }
+    except Exception as exc:
+        logger.error(f"Error during trigger_demo_seed: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Seed execution failed: {type(exc).__name__}: {str(exc)}",
+        )
+
+
+@app.get(f"{settings.API_V1_PREFIX}/system/seed-status", tags=["System Management"])
+async def get_seed_status(db: AsyncSession = Depends(get_db)):
+    """Check current database row counts for canonical demonstration data."""
+    from sqlalchemy import select, func
+    from app.models import Institution, ProgrammeApproval, StudentEnrolment, IntakeBatch, IntegritySignal, AuditLog
+
+    inst_c = (await db.execute(select(func.count(Institution.id)))).scalar() or 0
+    prog_c = (await db.execute(select(func.count(ProgrammeApproval.id)))).scalar() or 0
+    st_c = (await db.execute(select(func.count(StudentEnrolment.id)))).scalar() or 0
+    batch_c = (await db.execute(select(func.count(IntakeBatch.id)))).scalar() or 0
+    sig_c = (await db.execute(select(func.count(IntegritySignal.id)))).scalar() or 0
+    aud_c = (await db.execute(select(func.count(AuditLog.id)))).scalar() or 0
+
+    return {
+        "success": True,
+        "counts": {
+            "institutions": inst_c,
+            "programmes": prog_c,
+            "students": st_c,
+            "batches": batch_c,
+            "signals": sig_c,
+            "audit_logs": aud_c,
+        },
+        "is_seeded": (st_c >= 13 and inst_c >= 3 and prog_c >= 4),
     }
 
 
